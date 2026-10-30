@@ -1,4 +1,4 @@
-"""CSV 数据源：数据在本库的物理表 ds{dataset_id}_t* 里。"""
+"""CSV 数据源：数据在本地库的物理表 ds{dataset_id}_t*。"""
 
 from typing import Any
 
@@ -28,10 +28,19 @@ class CSVDataSource:
         async with self.session_factory() as session:
             await session.execute(text("SELECT 1"))
 
-    async def discover_schema(self) -> list[TableSchema]:
+    async def _allowed_tables(self) -> set[str]:
         async with self.session_factory() as session:
             tables = await DatasetRepository(session).list_tables(self.dataset_id)
-            schemas: list[TableSchema] = []
+        return {t.physical_name for t in tables}
+
+    def _check_readonly(self, sql: str) -> None:
+        if not sql.lower().lstrip().startswith(("select", "with")):
+            raise ValueError("只允许 SELECT 查询")
+
+    async def discover_schema(self) -> list[TableSchema]:
+        schemas: list[TableSchema] = []
+        async with self.session_factory() as session:
+            tables = await DatasetRepository(session).list_tables(self.dataset_id)
             for table in tables:
                 cols = await session.execute(
                     text(
@@ -52,21 +61,29 @@ class CSVDataSource:
                         ],
                     )
                 )
-            return schemas
+        return schemas
 
     async def execute(
         self, sql: str, *, limit: int = 1000, timeout_s: int = 30
     ) -> list[dict[str, Any]]:
-        # CSV 源只允许查本 dataset 的物理表
+        self._check_readonly(sql)
+        allowed = await self._allowed_tables()
+        lowered = sql.lower()
+        if not any(name in lowered for name in allowed):
+            raise ValueError("SQL 未引用本数据集中的表")
         async with self.session_factory() as session:
-            tables = await DatasetRepository(session).list_tables(self.dataset_id)
-            allowed = {t.physical_name for t in tables}
-            lowered = sql.lower()
-            if not lowered.lstrip().startswith("select"):
-                raise ValueError("只允许 SELECT 查询")
-            if not any(name in lowered for name in allowed):
-                raise ValueError("SQL 未引用本数据集中的表")
             result = await session.execute(text(sql))
             rows = result.fetchmany(limit)
             keys = list(result.keys())
             return [dict(zip(keys, row)) for row in rows]
+
+    async def validate(self, sql: str) -> None:
+        self._check_readonly(sql)
+        async with self.session_factory() as session:
+            await session.execute(text(f"EXPLAIN {sql}"))
+
+    async def db_info(self) -> dict[str, str]:
+        async with self.session_factory() as session:
+            version = (await session.execute(text("SELECT VERSION()"))).scalar()
+            dialect = session.bind.dialect.name
+        return {"dialect": str(dialect), "version": str(version)}

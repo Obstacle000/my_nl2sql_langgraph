@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from app.datasources.base import ColumnSchema, TableSchema
 
 
-# DataSource 协议的 MySQL 实现：连用户的库、读表结构、执行查询。
 class MySQLDataSource:
     kind = "mysql"
 
@@ -42,7 +41,6 @@ class MySQLDataSource:
         async with self._engine().connect() as conn:
             rows = await conn.execute(sql, {"db": self.config["database"]})
             for table_name, column_name, column_type, comment in rows:
-                # dict.setdefault(key, default)：key 存在就返回它的值，不存在就先存 default 再返回。
                 grouped.setdefault(table_name, TableSchema(name=table_name)).columns.append(
                     ColumnSchema(name=column_name, type=column_type, comment=comment or "")
                 )
@@ -51,11 +49,22 @@ class MySQLDataSource:
     async def execute(
         self, sql: str, *, limit: int = 1000, timeout_s: int = 30
     ) -> list[dict[str, Any]]:
-        if not sql.lower().lstrip().startswith("select"):
+        if not sql.lower().lstrip().startswith(("select", "with")):
             raise ValueError("只允许 SELECT 查询")
         async with self._engine().connect() as conn:
-            # 执行层兜底：即使模型漏写 LIMIT，也不返回超过 limit 行
             result = await conn.execute(text(sql))
             rows = result.fetchmany(limit)
             keys = list(result.keys())
             return [dict(zip(keys, row)) for row in rows]
+
+    async def validate(self, sql: str) -> None:
+        if not sql.lower().lstrip().startswith(("select", "with")):
+            raise ValueError("只允许 SELECT 查询")
+        async with self._engine().connect() as conn:
+            await conn.execute(text(f"EXPLAIN {sql}"))
+
+    async def db_info(self) -> dict[str, str]:
+        async with self._engine().connect() as conn:
+            version = (await conn.execute(text("SELECT VERSION()"))).scalar()
+            dialect = conn.dialect.name
+        return {"dialect": dialect, "version": str(version)}

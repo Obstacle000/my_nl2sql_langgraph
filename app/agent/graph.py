@@ -1,81 +1,108 @@
-"""最小可用图：缓存 → 召回 → 生成 → 校验 → 执行。"""
+"""完整图：缓存 → 关键词 → 三路召回 → 合并 → 过滤 → 上下文 → 生成 → 校验/修正 → 执行 → 自检 → 缓存。"""
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
+from app.agent.nodes.add_extra_context import add_extra_context
+from app.agent.nodes.check_result import check_result
+from app.agent.nodes.correct_sql import correct_sql
+from app.agent.nodes.extract_keywords import extract_keywords
+from app.agent.nodes.filter_metric import filter_metric
+from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.generate_sql import generate_sql
+from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
+from app.agent.nodes.recall_column import recall_column
+from app.agent.nodes.recall_metric import recall_metric
+from app.agent.nodes.recall_value import recall_value
+from app.agent.nodes.run_sql import run_sql
+from app.agent.nodes.validate_sql import validate_sql
+from app.agent.nodes.write_cache import write_cache
 from app.agent.state import Nl2SqlState
+
+MAX_FIX_ROUNDS = 1
+MAX_CHECK_ROUNDS = 1
 
 
 async def check_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """命中缓存则直接填 sql，后续跳过生成。"""
-    writer = runtime.stream_writer
-    writer({"type": "progress", "step": "检查缓存", "status": "running"})
+    """先查精确缓存；命中直接执行，跳过召回与生成。"""
+    runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "running"})
     cache = runtime.context["cache_repo"]
     sql = await cache.get_exact(
-        state["user_id"], state["dataset_id"], state["schema_version"], state["question"]
+        state["user_id"], state["dataset_id"], state.get("schema_version", 1), state["question"]
     )
-    writer({"type": "progress", "step": "检查缓存", "status": "success"})
+    runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "success"})
     if sql:
         return {"sql": sql, "hit_cache": True}
     return {"hit_cache": False}
 
 
-async def recall(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """占位：下一步接 Qdrant 字段召回 + ES 取值召回 + MySQL 指标。"""
-    writer = runtime.stream_writer
-    writer({"type": "progress", "step": "召回", "status": "running"})
-    writer({"type": "progress", "step": "召回", "status": "success"})
-    return {"candidates": []}
-
-
-async def generate_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """占位：下一步接 prompt + LLM 生成 SQL。"""
-    if state.get("sql"):
-        return {}
-    writer = runtime.stream_writer
-    writer({"type": "progress", "step": "生成SQL", "status": "running"})
-    writer({"type": "progress", "step": "生成SQL", "status": "success"})
-    return {"sql": ""}
-
-
-async def validate_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """占位：下一步接 EXPLAIN 校验。"""
-    writer = runtime.stream_writer
-    writer({"type": "progress", "step": "校验SQL", "status": "running"})
-    writer({"type": "progress", "step": "校验SQL", "status": "success"})
-    return {"error": None}
-
-
-async def run_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """占位：下一步接只读执行。"""
-    writer = runtime.stream_writer
-    writer({"type": "progress", "step": "执行SQL", "status": "running"})
-    writer({"type": "progress", "step": "执行SQL", "status": "success"})
-    writer({"type": "result", "data": []})
-    return {"rows": []}
-
-
 def route_after_cache(state: Nl2SqlState) -> str:
-    return "run_sql" if state.get("hit_cache") else "recall"
+    return "run_sql" if state.get("hit_cache") else "extract_keywords"
+
+
+def route_after_validate(state: Nl2SqlState) -> str:
+    if state.get("error") is None:
+        return "run_sql"
+    if state.get("fix_rounds", 0) >= MAX_FIX_ROUNDS:
+        return "run_sql"          # 修不动了，交给执行暴露错误
+    return "correct_sql"
+
+
+def route_after_check(state: Nl2SqlState) -> str:
+    if state.get("retry_reason") and state.get("check_rounds", 0) <= MAX_CHECK_ROUNDS:
+        return "correct_sql"
+    return "write_cache"
 
 
 builder = StateGraph(state_schema=Nl2SqlState, context_schema=Nl2SqlContext)
+
 builder.add_node("check_cache", check_cache)
-builder.add_node("recall", recall)
+builder.add_node("extract_keywords", extract_keywords)
+builder.add_node("recall_column", recall_column)
+builder.add_node("recall_value", recall_value)
+builder.add_node("recall_metric", recall_metric)
+builder.add_node("merge_retrieved_info", merge_retrieved_info)
+builder.add_node("filter_table", filter_table)
+builder.add_node("filter_metric", filter_metric)
+builder.add_node("add_extra_context", add_extra_context)
 builder.add_node("generate_sql", generate_sql)
 builder.add_node("validate_sql", validate_sql)
+builder.add_node("correct_sql", correct_sql)
 builder.add_node("run_sql", run_sql)
+builder.add_node("check_result", check_result)
+builder.add_node("write_cache", write_cache)
 
 builder.add_edge(START, "check_cache")
 builder.add_conditional_edges(
     "check_cache",
     route_after_cache,
-    {"run_sql": "run_sql", "recall": "recall"},
+    {"run_sql": "run_sql", "extract_keywords": "extract_keywords"},
 )
-builder.add_edge("recall", "generate_sql")
+builder.add_edge("extract_keywords", "recall_column")
+builder.add_edge("extract_keywords", "recall_value")
+builder.add_edge("extract_keywords", "recall_metric")
+builder.add_edge("recall_column", "merge_retrieved_info")
+builder.add_edge("recall_value", "merge_retrieved_info")
+builder.add_edge("recall_metric", "merge_retrieved_info")
+builder.add_edge("merge_retrieved_info", "filter_table")
+builder.add_edge("merge_retrieved_info", "filter_metric")
+builder.add_edge("filter_table", "add_extra_context")
+builder.add_edge("filter_metric", "add_extra_context")
+builder.add_edge("add_extra_context", "generate_sql")
 builder.add_edge("generate_sql", "validate_sql")
-builder.add_edge("validate_sql", "run_sql")
-builder.add_edge("run_sql", END)
+builder.add_conditional_edges(
+    "validate_sql",
+    route_after_validate,
+    {"run_sql": "run_sql", "correct_sql": "correct_sql"},
+)
+builder.add_edge("correct_sql", "validate_sql")
+builder.add_edge("run_sql", "check_result")
+builder.add_conditional_edges(
+    "check_result",
+    route_after_check,
+    {"correct_sql": "correct_sql", "write_cache": "write_cache"},
+)
+builder.add_edge("write_cache", END)
 
 graph = builder.compile()
