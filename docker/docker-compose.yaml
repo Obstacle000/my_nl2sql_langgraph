@@ -1,0 +1,42 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: nl2sql-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: nl2sql
+      MYSQL_USER: nl2sql
+      MYSQL_PASSWORD: nl2sql123
+    ports: ["3307:3306"]
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+    volumes: ["mysql_data:/var/lib/mysql"]
+
+  redis:
+    image: redis:7
+    container_name: nl2sql-redis
+    restart: unless-stopped
+    ports: ["6379:6379"]
+
+  qdrant:
+    image: qdrant/qdrant:v1.16
+    container_name: nl2sql-qdrant
+    restart: unless-stopped
+    ports: ["6333:6333"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+
+  elasticsearch:
+    image: elasticsearch:8.19.10
+    container_name: nl2sql-es
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ports: ["9201:9200"]
+    volumes: ["es_data:/usr/share/elasticsearch/data"]
+
+volumes:
+  mysql_data:
+  qdrant_data:
+  es_data:

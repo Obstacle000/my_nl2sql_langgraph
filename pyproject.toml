@@ -1,0 +1,36 @@
+[project]
+name = "my-nl2sql"
+version = "0.1.0"
+description = "多用户 NL2SQL：CSV 上传建表 + 三路召回 + Redis 缓存"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "uvicorn>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncmy>=0.2",
+    "aiosqlite>=0.20",
+    "redis>=5.0",
+    "qdrant-client>=1.12",
+    "elasticsearch[async]>=8,<9",
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    "pyjwt>=2.8",
+    "passlib[bcrypt]>=1.7",
+    "python-multipart>=0.0.9",
+    "pandas>=2.2",
+    "omegaconf>=2.3",
+    "python-dotenv>=1.0",
+    "loguru>=0.7",
+    "cryptography>=42",
+    "jieba>=0.42",
+    "pyyaml>=6.0",
+    "pandas-stubs~=3.1.0",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.6"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

@@ -1,0 +1,45 @@
+logging:
+  level: INFO
+
+mysql:
+  host: 192.168.194.128
+  port: 3306
+  user: root
+  password: 123456
+  database: nl2sql
+
+redis:
+  host: 192.168.194.128
+  port: 6379
+  db: 0
+  password: ""
+
+qdrant:
+  host: 192.168.194.128
+  port: 6333
+  embedding_size: 1024
+
+elasticsearch:
+  host: 192.168.194.128
+  port: 9201
+  index_name: nl2sql_values
+
+embedding:
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ${oc.env:LLM_API_KEY}
+  model: text-embedding-v3
+  dim: 1024
+
+llm:
+  base_url: ${oc.env:LLM_BASE_URL}
+  api_key: ${oc.env:LLM_API_KEY}
+  model: ${oc.env:LLM_MODEL}
+
+auth:
+  jwt_secret: ${oc.env:JWT_SECRET}
+  access_token_minutes: 120
+
+cache:
+  sql_ttl_seconds: 604800
+  semantic_threshold: 0.95
+  semantic_ttl_seconds: 604800
