@@ -4,15 +4,23 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from jwt import PyJWTError
 
 from app.api.lifespan import lifespan
 from app.api.routers import auth, datasets, datasources, query
 from app.core.context import request_id_ctx_var, user_id_ctx_var
+from app.core.errors import AppError
 from app.core.log import logger
 from app.core.security import create_access_token, decode_access_token
 
 app = FastAPI(title="my-nl2sql", lifespan=lifespan)
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    """把业务异常翻译成 HTTP 状态码，而不是 500。"""
+    return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
 app.include_router(auth.router)          # 公开：不挂 CurrentUser
 app.include_router(datasources.public_router)   # 公开：示例接口
 app.include_router(datasources.router)

@@ -56,7 +56,7 @@ class SQLCacheRepository:
         await self.client.set(
             key, json.dumps({"sql": sql}, ensure_ascii=False), ex=self.config.sql_ttl_seconds
         )
-
+    # 向量以 JSON 存在 Redis 的 hash 里，余弦相似度是 Python 手算的。
     async def get_semantic(
         self,
         user_id: int,
@@ -66,12 +66,21 @@ class SQLCacheRepository:
     ) -> tuple[str, float] | None:
         """在同类问题的向量集合里找最相似的一条，超过阈值才复用。"""
         key = self.semantic_key(user_id, dataset_id, schema_version)
+        # 用key取redis里找entries
+        # entries:
+        # {
+        #     "9f3a1b2c4d5e6f70": '{"vector": [0.0123, -0.0456, ...], "sql": "SELECT SUM(amount) AS ..."}',
+        #     "aa11bb22cc33dd44": '{"vector": [0.0087, 0.0210, ...], "sql": "SELECT COUNT(*) AS ..."}',
+        # }
+        #   ↑ field（问题 hash 前 16 位）        ↑ value（JSON 字符串）
         entries = await self.client.hgetall(key)
         best_sql: str | None = None
         best_score = 0.0
         for payload in entries.values():
             item: dict[str, Any] = json.loads(payload)
+            # # 进行余弦相似度检验
             score = cosine(vector, item["vector"])
+            # 找到最相似的
             if score > best_score:
                 best_score, best_sql = score, item["sql"]
         if best_sql is not None and best_score >= self.config.semantic_threshold:

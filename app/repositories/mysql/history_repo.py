@@ -24,6 +24,7 @@ class HistoryRepository:
         status: str = "ok",
         error: str = "",
     ) -> None:
+        """单条审计写入：自己提交，不参与用例事务（问数链路不持事务）。"""
         self.session.add(
             QueryHistory(
                 user_id=user_id,
@@ -38,4 +39,4 @@ class HistoryRepository:
                 created_at=time.time(),
             )
         )
-        await self.session.flush()
+        await self.session.commit()

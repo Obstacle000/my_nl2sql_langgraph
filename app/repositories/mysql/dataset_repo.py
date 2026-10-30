@@ -44,31 +44,31 @@ class DatasetRepository:
         """建 kind=csv 的数据源 + 空数据集（同一事务）。"""
         from app.models.datasource import DataSource
 
-        async with self.session.begin():
-            datasource = DataSource(user_id=user_id, kind="csv", name=name, status="ok")
-            self.session.add(datasource)
-            await self.session.flush()
-            dataset = Dataset(
-                user_id=user_id,
-                name=name,
-                description=description,
-                datasource_id=datasource.id,
-            )
-            self.session.add(dataset)
+        datasource = DataSource(user_id=user_id, kind="csv", name=name, status="ok")
+        self.session.add(datasource)
+        await self.session.flush()
+        dataset = Dataset(
+            user_id=user_id,
+            name=name,
+            description=description,
+            datasource_id=datasource.id,
+        )
+        self.session.add(dataset)
+        await self.session.flush()
         return dataset
 
     async def create_with_datasource(
         self, user_id: int, name: str, description: str, datasource_id: int
     ) -> Dataset:
         """在已有数据源下建数据集（独立事务）。"""
-        async with self.session.begin():
-            dataset = Dataset(
-                user_id=user_id,
-                name=name,
-                description=description,
-                datasource_id=datasource_id,
-            )
-            self.session.add(dataset)
+        dataset = Dataset(
+            user_id=user_id,
+            name=name,
+            description=description,
+            datasource_id=datasource_id,
+        )
+        self.session.add(dataset)
+        await self.session.flush()
         return dataset
 
     async def list_by_datasource(self, user_id: int, datasource_id: int) -> list[Dataset]:
@@ -111,7 +111,7 @@ class DatasetRepository:
                 DatasetTable.physical_name == physical_name,
             )
         )
-        await self.session.commit()
+        await self.session.flush()
 
     async def bump_schema_version(self, dataset_id: int) -> int:
         """schema 变更后 +1 并提交；返回新版本（用于缓存失效）。"""
@@ -120,7 +120,7 @@ class DatasetRepository:
             return 0
         dataset.schema_version += 1
         version = dataset.schema_version
-        await self.session.commit()
+        await self.session.flush()
         return version
 
     async def delete(self, user_id: int, dataset_id: int) -> None:

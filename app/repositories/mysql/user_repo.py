@@ -19,9 +19,9 @@ class UserRepository:
 
     async def create_committed(self, username: str, password_hash: str) -> User:
         """建用户并提交（服务层不碰事务）。"""
-        async with self.session.begin():
-            user = User(username=username, password_hash=password_hash)
-            self.session.add(user)
+        user = User(username=username, password_hash=password_hash)
+        self.session.add(user)
+        await self.session.commit()      # 单条写入，自己提交
         return user
 
     async def create(self, username: str, password_hash: str) -> User:

@@ -78,7 +78,7 @@ class DatasourceService:
         dataset_description: str = "",
         tables: list[str] | None = None,
     ) -> dict[str, object]:
-        source = MySQLDataSource(0, config) # 临时引擎,专门用于测试链接和拿schema的
+        source = MySQLDataSource(0, config)
         try:
             await source.test_connection()
             schemas = await source.discover_schema()

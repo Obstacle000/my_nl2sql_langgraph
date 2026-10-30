@@ -20,8 +20,7 @@ class TokenResponse(BaseModel):
 
 class DatasetCreateResponse(BaseModel):
     dataset_id: int
-    tables: list[str]
-    rows: int
+    name: str
 
 
 class QueryRequest(BaseModel):

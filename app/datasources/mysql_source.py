@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from app.datasources.base import ColumnSchema, TableSchema
 
 
+# 访问用户的数据源,不适用manager,通过懒加载,手动创建引擎
+# 使用的时候先看缓存里有没有,没有才建立
 class MySQLDataSource:
     kind = "mysql"
 
@@ -17,6 +19,7 @@ class MySQLDataSource:
         self.engine: AsyncEngine | None = None
 
     def _engine(self) -> AsyncEngine:
+        # 懒加载,首次调用时才建立
         if self.engine is None:
             cfg = self.config
             url = (

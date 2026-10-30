@@ -67,17 +67,19 @@ async def probe(
 async def create(
     body: DataSourceCreateRequest,
     user_id: CurrentUser,
+    session: SessionDep,
     service: DatasourceServiceDep,
 ) -> dict:
     """创建数据源 + 数据集（只登记选中的表），并建索引。"""
-    return await service.create_mysql(
-        user_id=user_id,
-        name=body.name,
-        config=body.config.model_dump(),
-        dataset_name=body.dataset.name,
-        dataset_description=body.dataset.description,
-        tables=body.dataset.tables,
-    )
+    async with session.begin():
+        return await service.create_mysql(
+            user_id=user_id,
+            name=body.name,
+            config=body.config.model_dump(),
+            dataset_name=body.dataset.name,
+            dataset_description=body.dataset.description,
+            tables=body.dataset.tables,
+        )
 
 
 @router.get("")
@@ -104,6 +106,7 @@ async def preview_sync(
 async def sync_schema(
     datasource_id: int,
     user_id: CurrentUser,
+    session: SessionDep,
     service: DatasourceServiceDep,
     body: SyncRequest | None = None,
 ) -> dict:
@@ -111,11 +114,16 @@ async def sync_schema(
     tables = body.tables if body else None
     drop_columns = body.drop_columns if body else False
     drop_tables = body.drop_tables if body else False
-    return await service.sync(user_id, datasource_id, tables, drop_columns, drop_tables)
+    async with session.begin():
+        return await service.sync(user_id, datasource_id, tables, drop_columns, drop_tables)
 
 
 @router.delete("/{datasource_id}")
 async def delete_datasource(
-    datasource_id: int, user_id: CurrentUser, service: DatasourceServiceDep
+    datasource_id: int,
+    user_id: CurrentUser,
+    session: SessionDep,
+    service: DatasourceServiceDep,
 ) -> dict:
-    return await service.delete(user_id, datasource_id)
+    async with session.begin():
+        return await service.delete(user_id, datasource_id)

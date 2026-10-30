@@ -3,21 +3,23 @@
 import datetime as dt
 from typing import Any
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.conf.app_config import app_config
 from app.core.errors import UnauthorizedError
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def hash_password(raw: str) -> str:
-    return _pwd.hash(raw)
+    """bcrypt 直接调用：passlib 1.7 与 bcrypt>=4.1 不兼容。"""
+    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(raw: str, hashed: str) -> bool:
-    return _pwd.verify(raw, hashed)
+    try:
+        return bcrypt.checkpw(raw.encode("utf-8"), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def create_access_token(user_id: int, username: str) -> str:

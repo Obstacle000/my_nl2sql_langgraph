@@ -66,7 +66,7 @@ async def query(
         fix_rounds=0,
         check_rounds=0,
         hit_cache=False,
-        _started_at=time.time(),
+        started_at=time.time(),
     )
 
     async def stream():

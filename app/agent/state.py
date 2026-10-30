@@ -33,3 +33,5 @@ class Nl2SqlState(TypedDict, total=False):
     # 结果与缓存
     rows: list[dict[str, Any]]
     hit_cache: bool
+    cache_kind: str          # exact / semantic / miss
+    started_at: float

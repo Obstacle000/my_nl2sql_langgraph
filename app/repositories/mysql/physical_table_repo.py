@@ -17,7 +17,7 @@ class PhysicalTableRepository:
         await self.session.execute(
             text(f"CREATE TABLE IF NOT EXISTS `{physical}` ({columns_sql})")
         )
-        await self.session.commit()
+        await self.session.flush()
 
     async def insert_rows(
         self, physical: str, columns: Sequence[str], rows: Iterable[Sequence[Any]]
@@ -31,7 +31,7 @@ class PhysicalTableRepository:
         await raw.exec_driver_sql(
             f"INSERT INTO `{physical}` ({cols}) VALUES ({placeholders})", rows
         )
-        await self.session.commit()
+        await self.session.flush()
         return len(rows)
 
     async def drop_table(self, physical: str) -> None:

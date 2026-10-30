@@ -62,12 +62,16 @@ async def list_datasets(user_id: CurrentUser, repo: DatasetRepositoryDep) -> dic
 
 @router.post("", status_code=201, response_model=DatasetCreateResponse)
 async def create_dataset(
-    body: DatasetCreateRequest, user_id: CurrentUser, service: DatasetServiceDep
+    body: DatasetCreateRequest,
+    user_id: CurrentUser,
+    session: SessionDep,
+    service: DatasetServiceDep,
 ) -> DatasetCreateResponse:
     """新建空数据集（同时建一个 kind=csv 的数据源）。"""
-    result = await service.create_dataset(
-        user_id=user_id, name=body.name, description=body.description
-    )
+    async with session.begin():          # 一个用例 = 一个事务
+        result = await service.create_dataset(
+            user_id=user_id, name=body.name, description=body.description
+        )
     return DatasetCreateResponse(**result)
 
 
@@ -75,17 +79,19 @@ async def create_dataset(
 async def upload_csv(
     dataset_id: int,
     user_id: CurrentUser,
+    session: SessionDep,
     service: DatasetServiceDep,
     name: str = Form(...),
     file: UploadFile = File(...),  # noqa: B008
 ) -> TableCreateResponse:
     """往数据集里追加一张表（CSV → 物理表 + 元数据 + 索引）。"""
     raw = await file.read()
-    result = await service.add_csv_table(
-        user_id=user_id,
-        dataset_id=dataset_id,
-        table_name=name,
-        csv_bytes=raw,
-        filename=file.filename or "data.csv",
-    )
+    async with session.begin():          # 元数据与表登记同一事务
+        result = await service.add_csv_table(
+            user_id=user_id,
+            dataset_id=dataset_id,
+            table_name=name,
+            csv_bytes=raw,
+            filename=file.filename or "data.csv",
+        )
     return TableCreateResponse(**result)

@@ -3,9 +3,9 @@ logging:
 
 mysql:
   host: 192.168.194.128
-  port: 3306
+  port: 3307
   user: root
-  password: 123456
+  password: dili123
   database: nl2sql
 
 redis:

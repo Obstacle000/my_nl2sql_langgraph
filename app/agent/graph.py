@@ -1,5 +1,98 @@
 """完整图：缓存 → 关键词 → 三路召回 → 合并 → 过滤 → 上下文 → 生成 → 校验/修正 → 执行 → 自检 → 缓存。"""
-
+#                       ┌─────────────┐
+#                       │    START    │
+#                       └──────┬──────┘
+#                              │ question / user_id / dataset_id / schema_version
+#                              ▼
+#                   ┌──────────────────────────┐
+#                   │       check_cache        │  ✅ 已实现
+#                   │  精确缓存（问题 hash）      │
+#                   └───────────┬──────────────┘
+#                               │
+#              命中 ────────────┴──────────── 未命中
+#                │                              │
+#                │                              ▼
+#                │                 ┌──────────────────────────┐
+#                │                 │     extract_keywords     │
+#                │                 │  jieba + 原句兜底 → keywords│
+#                │                 └────────────┬─────────────┘
+#                │                              │
+#                │        ┌─────────────────────┼─────────────────────┐
+#                │        ▼                     ▼                     ▼
+#                │ ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+#                │ │recall_column │   │ recall_value │   │recall_metric │
+#                │ │ Qdrant 字段   │   │  ES 取值      │   │ Qdrant 指标   │
+#                │ │ filter:租户   │   │ filter:租户   │   │ filter:租户   │
+#                │ └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+#                │        │                  │                  │
+#                │        └──────────────────┼──────────────────┘
+#                │                           ▼
+#                │             ┌──────────────────────────────┐
+#                │             │    merge_retrieved_info      │
+#                │             │ 去重 + 补指标依赖字段          │
+#                │             │ + 命中取值 → matched_values   │
+#                │             │ + 补主外键 → table_infos      │
+#                │             └──────────────┬───────────────┘
+#                │                            │
+#                │          ┌─────────────────┴─────────────────┐
+#                │          ▼                                   ▼
+#                │ ┌────────────────────┐            ┌────────────────────┐
+#                │ │   filter_table     │            │   filter_metric    │
+#                │ │ LLM 选表 + 字段      │            │ LLM 选指标           │
+#                │ └─────────┬──────────┘            └─────────┬──────────┘
+#                │           │                                 │
+#                │           └────────────────┬────────────────┘
+#                │                            ▼
+#                │            ┌──────────────────────────────┐
+#                │            │     add_extra_context        │
+#                │            │ + date_info（今天/季度）        │
+#                │            │ + db_info（方言/版本）          │
+#                │            └──────────────┬───────────────┘
+#                │                           ▼
+#                │            ┌──────────────────────────────┐
+#                │            │        generate_sql          │
+#                │            │ table_infos + metric_infos   │
+#                │            │ + matched_values + date/db   │
+#                │            │ → SQL                        │
+#                │            └──────────────┬───────────────┘
+#                │                           ▼
+#                │            ┌──────────────────────────────┐
+#                │            │        validate_sql          │
+#                │            │   EXPLAIN 语法校验 → error?    │◄───────────────────┐
+#                │            └──────────────┬───────────────┘                     │
+#                │                           │                                     │
+#                │                           │────────┐error 有值且 fix_rounds=0    │回校验
+#                │                           │        ▼                            │
+#                │                           │  ┌──────────────────┐               │
+#                │                           │  │   correct_sql    │───────────────┘
+#                │                           │  │ 带错误重写（1 次）  │
+#                │                           │  └──────────────────┘
+#                │                           │
+#                │                           │
+#                │                           ▼  (通过)
+#                │            ┌──────────────────────────────┐
+#                │            │           run_sql            │
+#                │            │ source.execute(sql, limit)   │
+#                │            │ 只读 + 行数上限 + 超时          │
+#                │            └──────────────┬───────────────┘
+#                │                           ▼
+#                │            ┌──────────────────────────────┐
+#                │            │        check_result          │  ⬜ R2
+#                │            │ 空结果/全 NULL/比例越界         │
+#                │            │ 明细≠汇总 → 不合理?           │
+#                │            └──────────────┬───────────────┘
+#                │                           │
+#                │      不合理且 retry=0 ─────┤
+#                │           │               │ 合理
+#                │           ▼               ▼
+#                │   （回 correct_sql）  ┌──────────────────┐
+#                │                      │   write_cache    │
+#                │                      │ 精确 + 语义 + 审计 │
+#                │                      └────────┬─────────┘
+#                │                               ▼
+#                └──────────────────────────►┌─────────┐
+#                                            │   END   │
+#                                            └─────────┘
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
@@ -25,16 +118,37 @@ MAX_CHECK_ROUNDS = 1
 
 
 async def check_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
-    """先查精确缓存；命中直接执行，跳过召回与生成。"""
+    """两层缓存：先精确（归一化后 hash），再语义（embedding 相似度）。"""
     runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "running"})
-    cache = runtime.context["cache_repo"]
-    sql = await cache.get_exact(
-        state["user_id"], state["dataset_id"], state.get("schema_version", 1), state["question"]
-    )
-    runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "success"})
+    ctx = runtime.context
+    cache = ctx["cache_repo"]
+    user_id = state["user_id"]
+    dataset_id = state["dataset_id"]
+    version = state.get("schema_version", 1)
+    question = state["question"]
+
+    # ① 精确命中：归一化后完全一致
+    sql = await cache.get_exact(user_id, dataset_id, version, question)
     if sql:
-        return {"sql": sql, "hit_cache": True}
-    return {"hit_cache": False}
+        runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "success"})
+        return {"sql": sql, "hit_cache": True, "cache_kind": "exact"}
+
+    # ② 语义命中：换种说法也能复用（cosine ≥ 阈值）
+    try:
+        vector = await ctx["embedding"].aembed_query(question)
+        hit = await cache.get_semantic(user_id, dataset_id, version, vector)
+    except Exception:  # noqa: BLE001 - 语义缓存失败就当未命中
+        hit = None
+
+    runtime.stream_writer({"type": "progress", "step": "检查缓存", "status": "success"})
+    if hit:
+        semantic_sql, score = hit
+        runtime.stream_writer(
+            {"type": "progress", "step": "语义缓存命中", "status": "success", "score": round(score, 3)}
+        )
+        return {"sql": semantic_sql, "hit_cache": True, "cache_kind": "semantic"}
+
+    return {"hit_cache": False, "cache_kind": "miss"}
 
 
 def route_after_cache(state: Nl2SqlState) -> str:

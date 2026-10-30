@@ -52,7 +52,7 @@ class DataSourceRepository:
                 DataSource.id == datasource_id, DataSource.user_id == user_id
             )
         )
-        await self.session.commit()
+        await self.session.flush()
 
     async def set_status(self, datasource_id: int, status: str, error: str = "") -> None:
         row = await self.session.get(DataSource, datasource_id)

@@ -69,33 +69,33 @@ class MetaRepository:
         datasource_id: int = 0,
     ) -> None:
         """一张表 + 它的字段，同一事务写入。服务层只传实体，不碰 ORM。"""
-        async with self.session.begin():
-            self.session.add(
-                TableInfo(
-                    id=table_id,
+        self.session.add(
+            TableInfo(
+                id=table_id,
+                dataset_id=dataset_id,
+                name=name,
+                role=role,
+                description=description,
+            )
+        )
+        self.session.add_all(
+            [
+                ColumnInfo(
+                    id=col.id,
                     dataset_id=dataset_id,
-                    name=name,
-                    role=role,
-                    description=description,
+                    table_id=col.table_id,
+                    name=col.name,
+                    type=col.type,
+                    role=col.role,
+                    description=col.description,
+                    examples=json.dumps(col.examples, ensure_ascii=False),
+                    alias=json.dumps(col.alias, ensure_ascii=False),
                 )
-            )
-            self.session.add_all(
-                [
-                    ColumnInfo(
-                        id=col.id,
-                        dataset_id=dataset_id,
-                        table_id=col.table_id,
-                        name=col.name,
-                        type=col.type,
-                        role=col.role,
-                        description=col.description,
-                        examples=json.dumps(col.examples, ensure_ascii=False),
-                        alias=json.dumps(col.alias, ensure_ascii=False),
-                    )
-                    for col in columns
-                ]
-            )
+                for col in columns
+            ]
+        )
 
+        await self.session.flush()
     async def list_columns_by_table(
         self, dataset_id: int, table_id: str, datasource_id: int = 0
     ) -> list[ColumnInfoEntity]:
@@ -114,23 +114,23 @@ class MetaRepository:
         """只新增字段，不动已有字段。"""
         if not columns:
             return 0
-        async with self.session.begin():
-            self.session.add_all(
-                [
-                    ColumnInfo(
-                        id=col.id,
-                        dataset_id=dataset_id,
-                        table_id=col.table_id,
-                        name=col.name,
-                        type=col.type,
-                        role=col.role,
-                        description=col.description,
-                        examples=json.dumps(col.examples, ensure_ascii=False),
-                        alias=json.dumps(col.alias, ensure_ascii=False),
-                    )
-                    for col in columns
-                ]
-            )
+        self.session.add_all(
+            [
+                ColumnInfo(
+                    id=col.id,
+                    dataset_id=dataset_id,
+                    table_id=col.table_id,
+                    name=col.name,
+                    type=col.type,
+                    role=col.role,
+                    description=col.description,
+                    examples=json.dumps(col.examples, ensure_ascii=False),
+                    alias=json.dumps(col.alias, ensure_ascii=False),
+                )
+                for col in columns
+            ]
+        )
+        await self.session.flush()
         return len(columns)
 
     async def update_columns_meta(
@@ -139,13 +139,13 @@ class MetaRepository:
         """按 id 更新类型/描述（列名不变时用）。"""
         if not columns:
             return 0
-        async with self.session.begin():
-            for col in columns:
-                row = await self.session.get(ColumnInfo, col.id)
-                if row is None or row.dataset_id != dataset_id:
-                    continue
-                row.type = col.type
-                row.description = col.description
+        for col in columns:
+            row = await self.session.get(ColumnInfo, col.id)
+            if row is None or row.dataset_id != dataset_id:
+                continue
+            row.type = col.type
+            row.description = col.description
+        await self.session.flush()
         return len(columns)
 
     async def delete_table_meta(self, dataset_id: int, table_id: str) -> int:
@@ -162,7 +162,7 @@ class MetaRepository:
                 TableInfo.dataset_id == dataset_id, TableInfo.id == table_id
             )
         )
-        await self.session.commit()
+        await self.session.flush()
         return deleted
 
     async def delete_columns(
@@ -177,7 +177,7 @@ class MetaRepository:
                 ColumnInfo.dataset_id == dataset_id, ColumnInfo.id.in_(ids)
             )
         )
-        await self.session.commit()
+        await self.session.flush()
         return result.rowcount or 0
 
     async def delete_by_dataset(self, dataset_id: int) -> None:
@@ -186,7 +186,7 @@ class MetaRepository:
             await self.session.execute(
                 text(f"DELETE FROM {table} WHERE dataset_id = :d"), {"d": dataset_id}
             )
-        await self.session.commit()
+        await self.session.flush()
 
     async def save_columns(self, rows: list[ColumnInfo]) -> None:
         self.session.add_all(rows)
