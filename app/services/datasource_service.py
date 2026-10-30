@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+import os
 
 from cryptography.fernet import InvalidToken
 
 from app.core.crypto import decrypt_json
 from app.core.errors import NotFoundError
+from app.core.log import logger
 from app.datasources.mysql_source import MySQLDataSource
 from app.entities.meta import ColumnInfoEntity
 from app.repositories.es.value_es_repo import ValueESRepository
@@ -19,6 +21,7 @@ from app.repositories.mysql.datasource_repo import DataSourceRepository
 from app.repositories.mysql.meta_repo import MetaRepository
 from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
 from app.repositories.qdrant.meta_qdrant_repo import MetaQdrantRepository
+from app.services.meta_alias import generate_aliases
 from app.services.meta_index_service import MetaIndexService
 
 COLUMN_COLLECTION = MetaIndexService.COLUMN_COLLECTION
@@ -93,7 +96,10 @@ class DatasourceService:
         dataset = await self.dataset_repo.create_with_datasource(
             user_id, dataset_name or name, dataset_description, datasource.id
         )
-        columns = await self._persist_schema(dataset.id, selected, datasource.id)
+        samples = await self._collect_samples(source, selected)
+        columns = await self._persist_schema(
+            dataset.id, selected, datasource.id, samples=samples
+        )
         await self.repo.set_status(datasource.id, "ok")
         # 把这个数据集的元数据从 MySQL 读出来，重新生成 Qdrant 向量和 ES 索引。
         await self.index_service.reindex_dataset(user_id, dataset.id, datasource_id=datasource.id)
@@ -262,6 +268,8 @@ class DatasourceService:
         finally:
             if source.engine is not None:
                 await source.engine.dispose()
+        samples = await self._collect_samples(source, schemas)
+
         tables_local = await self.dataset_repo.list_tables(dataset.id)
         existing = {t.physical_name for t in tables_local}
         # 把用户传的表名列表转成 set，方便快速判断“这张表被选中了吗”；None 表示没指定（= 全选）。
@@ -272,7 +280,9 @@ class DatasourceService:
             s for s in schemas if s.name not in existing and (picked is None or s.name in picked)
         ]
         if new_schemas:
-            await self._persist_schema(dataset.id, new_schemas, datasource_id)
+            await self._persist_schema(
+                dataset.id, new_schemas, datasource_id, samples=samples
+            )
 
         # ② 已有表：加新列、更新类型，删列
         added_columns = 0
@@ -293,7 +303,7 @@ class DatasourceService:
                     type=col.type,
                     role=local_map[col.name].role if col.name in local_map else "dimension",
                     description=col.comment or col.name,
-                    examples=[],
+                    examples=samples.get(f"{schema.name}.{col.name}", []),
                     alias=[],
                     dataset_id=dataset.id,
                     datasource_id=datasource_id,
@@ -370,13 +380,95 @@ class DatasourceService:
         return {"deleted": stats}
 
     # ---- 内部：把发现的 schema 写成元数据 ----
+    # 日期类字段的值虽多，但格式（yyyyMMdd）对模型很关键 → 放宽阈值
+    DATE_LIKE_KEYWORDS = ("date", "day", "month", "year", "quarter", "time", "dt")
+
+    @classmethod
+    def _sample_limit(cls, column_name: str) -> int:
+        name = column_name.lower()
+        if any(keyword in name for keyword in cls.DATE_LIKE_KEYWORDS):
+            return 200
+        return 50
+
+    async def _collect_samples(self, source, schemas) -> dict[str, list]:
+        """采样字段示例值：日期类上限 200，其它上限 50；超过上限视为高基数跳过。
+
+        设环境变量 META_DISABLE_SAMPLING=1 可关闭采样（用于复现"没有 examples"的基线）。
+        """
+        if os.getenv("META_DISABLE_SAMPLING") == "1":
+            logger.warning("META_DISABLE_SAMPLING=1，跳过示例值采样")
+            return {}
+
+        samples: dict[str, list] = {}
+        for schema in schemas:
+            for col in schema.columns:
+                limit = self._sample_limit(col.name)
+                try:
+                    # 多取一条，用来判断是否超过上限
+                    rows = await source.execute(
+                        f"SELECT DISTINCT `{col.name}` AS v FROM `{schema.name}` LIMIT {limit + 1}",
+                        limit=limit + 1,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 采样失败跳过该列
+                    logger.debug(f"采样 {schema.name}.{col.name} 失败: {exc}")
+                    continue
+                values = [str(r["v"]) for r in rows if r["v"] is not None]
+                if 0 < len(values) <= limit:
+                    samples[f"{schema.name}.{col.name}"] = values
+        return samples
+
+    @staticmethod
+    def _infer_roles(schemas) -> dict[str, str]:
+        """按命名规则推断 role：表的主键、跨表外键、度量。
+
+        纯规则、零 token；role 是结构信息，必须在写 column_info 时就正确，
+        否则 get_key_columns（只查 primary_key/foreign_key）拿不到 JOIN 键。
+        """
+        pk_by_table: dict[str, str] = {}
+        for schema in schemas:
+            for col in schema.columns:
+                if col.name.lower().endswith("_id"):
+                    pk_by_table[schema.name] = col.name
+                    break
+        pk_names = set(pk_by_table.values())
+
+        roles: dict[str, str] = {}
+        for schema in schemas:
+            for col in schema.columns:
+                key = f"{schema.name}.{col.name}"
+                name = col.name.lower()
+                if name.endswith("_id"):
+                    if pk_by_table.get(schema.name) == col.name:
+                        roles[key] = "primary_key"
+                    elif col.name in pk_names:
+                        roles[key] = "foreign_key"
+                    else:
+                        roles[key] = "dimension"
+                elif any(
+                    kw in name
+                    for kw in ("amount", "quantity", "price", "total", "count", "qty", "revenue")
+                ) or any(t in col.type.lower() for t in ("decimal", "float", "double")):
+                    roles[key] = "measure"
+                else:
+                    roles[key] = "dimension"
+        return roles
+
     async def _persist_schema(
-        self, dataset_id: int, schemas, datasource_id: int = 0
+        self,
+        dataset_id: int,
+        schemas,
+        datasource_id: int = 0,
+        samples: dict[str, list] | None = None,
     ) -> list[ColumnInfoEntity]:
+        samples = samples or {}
+        roles = self._infer_roles(schemas)
         columns: list[ColumnInfoEntity] = []
         for schema in schemas:
             # 存dataset_tables
             await self.dataset_repo.add_table(dataset_id, schema.name, schema.name, 0)
+
+            # 生成中文别名（每表 1 次 LLM 调用）→ 每个别名进 Qdrant 一条向量
+            aliases = await generate_aliases(schema, samples)
 
             table_columns: list[ColumnInfoEntity] = [
                 ColumnInfoEntity(
@@ -384,10 +476,10 @@ class DatasourceService:
                     table_id=schema.name,
                     name=col.name,
                     type=col.type,
-                    role="dimension",
+                    role=roles.get(f"{schema.name}.{col.name}", "dimension"),
                     description=col.comment or col.name,
-                    examples=[],
-                    alias=[],
+                    examples=samples.get(f"{schema.name}.{col.name}", []),
+                    alias=aliases.get(col.name, []),
                     dataset_id=dataset_id,
                     datasource_id=datasource_id,
                 )

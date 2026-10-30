@@ -24,7 +24,8 @@ async def generate_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     prompt = PromptTemplate(
         template=load_prompt("generate_sql"),
         input_variables=[
-            "question", "table_infos", "metric_infos", "matched_values", "date_info", "db_info",
+            "question", "table_infos", "metric_infos", "matched_values",
+            "table_relations", "date_info", "db_info",
         ],
     )
     chain = prompt | llm | StrOutputParser()
@@ -34,6 +35,7 @@ async def generate_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
             "table_infos": yaml.dump(state.get("table_infos", []), allow_unicode=True, sort_keys=False),
             "metric_infos": yaml.dump(state.get("metric_infos", []), allow_unicode=True, sort_keys=False),
             "matched_values": yaml.dump(state.get("matched_values", []), allow_unicode=True, sort_keys=False),
+            "table_relations": yaml.dump(state.get("table_relations", []), allow_unicode=True),
             "date_info": yaml.dump(state.get("date_info", {}), allow_unicode=True),
             "db_info": yaml.dump(state.get("db_info", {}), allow_unicode=True),
         }

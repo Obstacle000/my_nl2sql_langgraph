@@ -20,6 +20,7 @@ class Nl2SqlState(TypedDict, total=False):
     table_infos: list[dict[str, Any]]
     metric_infos: list[dict[str, Any]]
     matched_values: list[dict[str, Any]]
+    table_relations: list[str]
     date_info: dict[str, str]
     db_info: dict[str, str]
 
