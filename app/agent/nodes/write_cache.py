@@ -10,6 +10,7 @@ import time
 from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 from app.core.log import logger
 
@@ -21,17 +22,20 @@ async def write_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> di
     user_id = ctx["user_id"]
     dataset_id = ctx["dataset_id"]
     version = state.get("schema_version", 1)
-    question = state["question"]
+    question = active_question(state)
     sql = state.get("sql", "")
 
     started = state.get("started_at") or time.time()
     # 自检最终未通过：结果可疑，不写缓存（避免错误答案被固化），只记审计
     suspect = state.get("retry_reason")
+    context_sig = state.get("context_sig", "")
     if sql and not suspect:
-        await cache.set_exact(user_id, dataset_id, version, question, sql)
+        await cache.set_exact(user_id, dataset_id, version, question, sql, context_sig)
         try:
             vector = await ctx["embedding"].aembed_query(question)
-            await cache.set_semantic(user_id, dataset_id, version, question, vector, sql)
+            await cache.set_semantic(
+                user_id, dataset_id, version, question, vector, sql, context_sig
+            )
         except Exception as exc:  # noqa: BLE001 - 语义缓存失败不影响主流程
             logger.warning(f"语义缓存写入失败: {exc}")
 

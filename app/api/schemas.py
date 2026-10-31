@@ -23,9 +23,17 @@ class DatasetCreateResponse(BaseModel):
     name: str
 
 
+class ConversationCreateRequest(BaseModel):
+    """新建会话：绑定一个数据集。"""
+
+    dataset_id: int
+    title: str = ""
+
+
 class QueryRequest(BaseModel):
     dataset_id: int
     question: str = Field(min_length=1, max_length=500)
+    conversation_id: int | None = None      # 传了就走多轮（带最近 3 轮历史）
 
 
 class DataSourceConfig(BaseModel):

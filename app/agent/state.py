@@ -6,6 +6,14 @@ from typing import Any, TypedDict
 class Nl2SqlState(TypedDict, total=False):
     # 输入
     question: str
+    conversation_id: int | None
+    history: list[dict[str, Any]]      # 最近几轮：[{role, content, sql}]
+
+    # 多轮改写
+    standalone_question: str           # 补全后可独立执行的问题
+    complete: bool                     # False 表示信息不全，走反问
+    missing: str                       # 缺什么（"时间范围"）
+    context_sig: str                   # 本轮继承条件的指纹（空=无上下文，与单轮共用缓存）
     user_id: int
     dataset_id: int
     schema_version: int

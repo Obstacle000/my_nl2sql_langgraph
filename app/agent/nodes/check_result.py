@@ -9,6 +9,7 @@ import re
 from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 
 
@@ -136,7 +137,7 @@ def _suspect_reason(
     state: Nl2SqlState, column_types: dict[str, str] | None = None
 ) -> str | None:
     rows = state.get("rows") or []
-    question = state.get("question", "")
+    question = active_question(state)
     sql = state.get("sql", "")
 
     # 原有两条：空结果 / 全 NULL

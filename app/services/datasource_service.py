@@ -468,10 +468,16 @@ class DatasourceService:
         纯规则、零 token；role 是结构信息，必须在写 column_info 时就正确，
         否则 get_key_columns（只查 primary_key/foreign_key）拿不到 JOIN 键。
         """
+        # 编号列的常见后缀：_id / _no / _cd / _code / _key
+        id_suffixes = ("_id", "_no", "_cd", "_code", "_key")
+
+        def _is_id(name: str) -> bool:
+            return name.lower().endswith(id_suffixes)
+
         pk_by_table: dict[str, str] = {}
         for schema in schemas:
             for col in schema.columns:
-                if col.name.lower().endswith("_id"):
+                if _is_id(col.name):
                     pk_by_table[schema.name] = col.name
                     break
         pk_names = set(pk_by_table.values())
@@ -481,7 +487,7 @@ class DatasourceService:
             for col in schema.columns:
                 key = f"{schema.name}.{col.name}"
                 name = col.name.lower()
-                if name.endswith("_id"):
+                if _is_id(col.name):
                     if pk_by_table.get(schema.name) == col.name:
                         roles[key] = "primary_key"
                     elif col.name in pk_names:

@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
 from app.agent.llm import llm
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 from app.prompt.prompt_loader import load_prompt
 
@@ -20,6 +21,14 @@ async def filter_table(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
         runtime.stream_writer({"type": "progress", "step": "过滤表信息", "status": "success"})
         return {"table_infos": []}
 
+    # 短路：只有一张表时没有"选哪张表"的问题，字段已由 merge 收窄过
+    # （召回字段 + 主外键 + 日期列），直接跳过这次 LLM 调用
+    if len(table_infos) == 1:
+        runtime.stream_writer(
+            {"type": "progress", "step": "过滤表信息", "status": "success", "skipped": True}
+        )
+        return {"table_infos": table_infos}
+
     prompt = PromptTemplate(
         template=load_prompt("filter_table_info"),
         input_variables=["question", "table_infos"],
@@ -28,7 +37,7 @@ async def filter_table(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     try:
         result = await chain.ainvoke(
             {
-                "question": state["question"],
+                "question": active_question(state),
                 "table_infos": yaml.dump(table_infos, allow_unicode=True, sort_keys=False),
             }
         )
@@ -52,7 +61,7 @@ async def filter_table(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     # 问题里提到时间时，日期类字段必须保留：
     # 否则模型没有日期列可用，会把时间条件硬套到订单号上
     has_time_word = bool(
-        re.search(r"\d{4}\s*年|\d{1,2}\s*月|\d{1,2}\s*日|今天|昨天|本周|本月|上周|上个月|季度", state["question"])
+        re.search(r"\d{4}\s*年|\d{1,2}\s*月|\d{1,2}\s*日|今天|昨天|本周|本月|上周|上个月|季度", active_question(state))
     )
     date_like = re.compile(r"date|dt|time|day|month|year", re.IGNORECASE)
 

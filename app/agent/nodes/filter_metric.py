@@ -7,6 +7,7 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
 from app.agent.llm import llm
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 from app.prompt.prompt_loader import load_prompt
 
@@ -26,7 +27,7 @@ async def filter_metric(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> 
     try:
         names = await chain.ainvoke(
             {
-                "question": state["question"],
+                "question": active_question(state),
                 "metric_infos": yaml.dump(metrics, allow_unicode=True, sort_keys=False),
             }
         )

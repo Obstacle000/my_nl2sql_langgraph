@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
 from app.agent.llm import llm
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 from app.prompt.prompt_loader import load_prompt
 
@@ -31,7 +32,7 @@ async def generate_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     chain = prompt | llm | StrOutputParser()
     sql = await chain.ainvoke(
         {
-            "question": state["question"],
+            "question": active_question(state),
             "table_infos": yaml.dump(state.get("table_infos", []), allow_unicode=True, sort_keys=False),
             "metric_infos": yaml.dump(state.get("metric_infos", []), allow_unicode=True, sort_keys=False),
             "matched_values": yaml.dump(state.get("matched_values", []), allow_unicode=True, sort_keys=False),

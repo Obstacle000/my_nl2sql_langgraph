@@ -19,6 +19,45 @@ def normalize_question(text: str) -> str:
     return re.sub(r"[\s，。？！；：、,.?!;:]+", "", (text or "").lower())
 
 
+# 关键度量概念：同一句话只差这几个词，语义完全不同，不能复用缓存
+METRIC_PATTERNS: dict[str, tuple[str, ...]] = {
+    "sales": ("销售额", "销售金额", "营收", "gmv", "成交额", "成交总额"),
+    "amount": ("金额", "金额合计", "总价"),
+    "quantity": ("销量", "数量", "件数", "卖了多少"),
+    "orders": ("订单数", "单量", "订单量", "多少单"),
+    "aov": ("客单价", "平均订单金额", "客单金额"),
+    "avg_qty": ("平均件数", "每单件数", "平均购买件数"),
+    "customers": ("客户数", "用户数", "多少客户", "多少用户"),
+}
+
+
+def metric_tags(text: str) -> set[str]:
+    """抽出这句话涉及哪些度量概念。"""
+    lowered = (text or "").lower()
+    return {
+        tag
+        for tag, words in METRIC_PATTERNS.items()
+        if any(word in lowered for word in words)
+    }
+
+
+# 这些标签过于泛化（"金额"常常只是修饰词），不参与阻断判断
+SOFT_TAGS = {"amount"}
+
+
+def metrics_compatible(query: str, cached_question: str) -> bool:
+    """比对"硬度量词"：两边都有时要求一致；任一侧没有就放行。
+
+    amount（金额）属于泛化词，单独出现不做阻断，
+    避免"销售额总金额" vs "总销售额" 这种同义改写被误杀。
+    """
+    query_tags = metric_tags(query) - SOFT_TAGS
+    cached_tags = metric_tags(cached_question) - SOFT_TAGS
+    if not query_tags or not cached_tags:
+        return True
+    return query_tags == cached_tags
+
+
 def cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
@@ -32,27 +71,46 @@ class SQLCacheRepository:
         self.config = config
 
     @staticmethod
-    def exact_key(user_id: int, dataset_id: int, schema_version: int, question: str) -> str:
+    def exact_key(
+        user_id: int,
+        dataset_id: int,
+        schema_version: int,
+        question: str,
+        context: str = "",
+    ) -> str:
         digest = hashlib.sha256(normalize_question(question).encode("utf-8")).hexdigest()[:32]
-        return f"sql:{user_id}:{dataset_id}:{schema_version}:{digest}"
+        # context 为空时 key 与旧格式完全一致，旧缓存继续有效
+        suffix = f":{context}" if context else ""
+        return f"sql:{user_id}:{dataset_id}:{schema_version}:{digest}{suffix}"
 
     @staticmethod
     def semantic_key(user_id: int, dataset_id: int, schema_version: int) -> str:
         return f"sqlvec:{user_id}:{dataset_id}:{schema_version}"
 
     async def get_exact(
-        self, user_id: int, dataset_id: int, schema_version: int, question: str
+        self,
+        user_id: int,
+        dataset_id: int,
+        schema_version: int,
+        question: str,
+        context: str = "",
     ) -> str | None:
-        key = self.exact_key(user_id, dataset_id, schema_version, question)
+        key = self.exact_key(user_id, dataset_id, schema_version, question, context)
         payload = await self.client.get(key)
         if payload is None:
             return None
         return json.loads(payload).get("sql")
 
     async def set_exact(
-        self, user_id: int, dataset_id: int, schema_version: int, question: str, sql: str
+        self,
+        user_id: int,
+        dataset_id: int,
+        schema_version: int,
+        question: str,
+        sql: str,
+        context: str = "",
     ) -> None:
-        key = self.exact_key(user_id, dataset_id, schema_version, question)
+        key = self.exact_key(user_id, dataset_id, schema_version, question, context)
         await self.client.set(
             key, json.dumps({"sql": sql}, ensure_ascii=False), ex=self.config.sql_ttl_seconds
         )
@@ -63,8 +121,13 @@ class SQLCacheRepository:
         dataset_id: int,
         schema_version: int,
         vector: list[float],
+        context: str = "",
+        question: str = "",
     ) -> tuple[str, float] | None:
-        """在同类问题的向量集合里找最相似的一条，超过阈值才复用。"""
+        """在同类问题的向量集合里找最相似的一条，超过阈值才复用。
+
+        context 不同的一律跳过：同一句话在不同上下文里 SQL 可能不同。
+        """
         key = self.semantic_key(user_id, dataset_id, schema_version)
         # 用key取redis里找entries
         # entries:
@@ -78,6 +141,11 @@ class SQLCacheRepository:
         best_score = 0.0
         for payload in entries.values():
             item: dict[str, Any] = json.loads(payload)
+            if (item.get("ctx") or "") != context:
+                continue
+            # 护栏：度量词不一致的（销售额 vs 销量）直接跳过，不看相似度
+            if not metrics_compatible(question, str(item.get("q") or "")):
+                continue
             # # 进行余弦相似度检验
             score = cosine(vector, item["vector"])
             # 找到最相似的
@@ -95,13 +163,18 @@ class SQLCacheRepository:
         question: str,
         vector: list[float],
         sql: str,
+        context: str = "",
     ) -> None:
         key = self.semantic_key(user_id, dataset_id, schema_version)
         digest = hashlib.sha256(normalize_question(question).encode("utf-8")).hexdigest()[:16]
+        field = f"{context}:{digest}" if context else digest
         await self.client.hset(
             key,
-            digest,
-            json.dumps({"vector": vector, "sql": sql}, ensure_ascii=False),
+            field,
+            json.dumps(
+                {"vector": vector, "sql": sql, "ctx": context, "q": question},
+                ensure_ascii=False,
+            ),
         )
         await self.client.expire(key, self.config.semantic_ttl_seconds)
 

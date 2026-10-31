@@ -3,6 +3,7 @@
 from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
+from app.agent.question import active_question
 from app.agent.state import Nl2SqlState
 
 
@@ -11,7 +12,7 @@ async def recall_value(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     ctx = runtime.context
     es = ctx["es_repo"]
 
-    question = state.get("question", "")
+    question = active_question(state)
     found: dict[str, dict] = {}
     for keyword in state["keywords"]:
         hits = await es.search(

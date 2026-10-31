@@ -13,6 +13,7 @@ from app.core.context import user_id_ctx_var
 from app.core.errors import UnauthorizedError
 from app.datasources.registry import DataSourceRegistry
 from app.repositories.es.value_es_repo import ValueESRepository
+from app.repositories.mysql.conversation_repo import ConversationRepository
 from app.repositories.mysql.dataset_repo import DatasetRepository
 from app.repositories.mysql.meta_repo import MetaRepository
 from app.repositories.mysql.user_repo import UserRepository
@@ -66,6 +67,10 @@ def get_dataset_repository(session: SessionDep) -> DatasetRepository:
     return DatasetRepository(session)
 
 
+def get_conversation_repository(session: SessionDep) -> ConversationRepository:
+    return ConversationRepository(session)
+
+
 def get_meta_repository(session: SessionDep) -> MetaRepository:
     return MetaRepository(session)
 
@@ -91,6 +96,9 @@ def get_sql_cache_repository() -> SQLCacheRepository:
 
 DatasetRepositoryDep = Annotated[DatasetRepository, Depends(get_dataset_repository)]
 MetaRepositoryDep = Annotated[MetaRepository, Depends(get_meta_repository)]
+ConversationRepositoryDep = Annotated[
+    ConversationRepository, Depends(get_conversation_repository)
+]
 QdrantRepositoryDep = Annotated[MetaQdrantRepository, Depends(get_qdrant_repository)]
 ValueESRepositoryDep = Annotated[ValueESRepository, Depends(get_value_es_repository)]
 SQLCacheRepositoryDep = Annotated[SQLCacheRepository, Depends(get_sql_cache_repository)]

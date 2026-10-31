@@ -17,6 +17,11 @@ class DatasetRepository:
         )
         return list(result.scalars().all())
 
+    async def list_all_ids(self) -> list[tuple[int, int]]:
+        """索引巡检用：[(user_id, dataset_id), ...]，不带租户过滤。"""
+        result = await self.session.execute(select(Dataset.id, Dataset.user_id))
+        return [(int(user_id), int(dataset_id)) for dataset_id, user_id in result.all()]
+
     async def get(self, user_id: int, dataset_id: int) -> Dataset | None:
         result = await self.session.execute(
             select(Dataset).where(Dataset.id == dataset_id, Dataset.user_id == user_id)
