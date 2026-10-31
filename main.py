@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from jwt import PyJWTError
 
 from app.api.lifespan import lifespan
-from app.api.routers import auth, datasets, datasources, query
+from app.api.routers import auth, datasets, datasources, metrics, query
 from app.core.context import request_id_ctx_var, user_id_ctx_var
 from app.core.errors import AppError
 from app.core.log import logger
@@ -25,6 +25,7 @@ app.include_router(auth.router)          # 公开：不挂 CurrentUser
 app.include_router(datasources.public_router)   # 公开：示例接口
 app.include_router(datasources.router)
 app.include_router(datasets.router)
+app.include_router(metrics.router)
 app.include_router(query.router)
 
 # token 剩余不足这么久就续签（滑动续期）

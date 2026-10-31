@@ -32,6 +32,19 @@ class ColumnInfo(Base):
     alias: Mapped[str] = mapped_column(Text, default="[]")           # JSON 字符串
 
 
+class TableRelation(Base):
+    """表间关联关系（建源时推断一次，问数时直接读）。"""
+
+    __tablename__ = "table_relation"
+
+    id: Mapped[str] = mapped_column(String(320), primary_key=True)   # from=to
+    dataset_id: Mapped[int] = mapped_column(Integer, ForeignKey("datasets.id"), index=True)
+    from_table: Mapped[str] = mapped_column(String(128))
+    from_column: Mapped[str] = mapped_column(String(128))
+    to_table: Mapped[str] = mapped_column(String(128))
+    to_column: Mapped[str] = mapped_column(String(128))
+
+
 class MetricInfo(Base):
     __tablename__ = "metric_info"
 
@@ -41,4 +54,5 @@ class MetricInfo(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     relevant_columns: Mapped[str] = mapped_column(Text, default="[]")  # JSON 字符串
     alias: Mapped[str] = mapped_column(Text, default="[]")
+    expression: Mapped[str] = mapped_column(Text, default="")          # 口径表达式
     created_at: Mapped[float] = mapped_column(BigInteger, default=lambda: int(time.time()))

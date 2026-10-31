@@ -106,6 +106,7 @@ class MetaQdrantRepository:
             "id": metric.id,
             "name": metric.name,
             "description": metric.description,
+            "expression": metric.expression,
             "relevant_columns": metric.relevant_columns,
             "alias": metric.alias,
         }

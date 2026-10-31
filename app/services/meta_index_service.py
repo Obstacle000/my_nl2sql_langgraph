@@ -33,7 +33,37 @@ class MetaIndexService:
         await self.qdrant.delete_by_dataset(self.COLUMN_COLLECTION, user_id, dataset_id)
         columns = await self.meta_repo.list_columns(dataset_id, datasource_id)
         await self._index_columns(user_id, dataset_id, datasource_id, columns)
+        await self.reindex_metrics(user_id, dataset_id, datasource_id)
         return len(columns)
+
+    async def reindex_metrics(
+        self, user_id: int, dataset_id: int, datasource_id: int = 0
+    ) -> int:
+        """重建指标向量：name + 别名 + 描述，各自一条。"""
+        await self.qdrant.delete_by_dataset(self.METRIC_COLLECTION, user_id, dataset_id)
+        metrics = await self.meta_repo.list_metrics(dataset_id)
+        texts: list[str] = []
+        payloads: list[dict] = []
+        for metric in metrics:
+            for text in [metric.name, *metric.alias, metric.description]:
+                if not text:
+                    continue
+                texts.append(text)
+                payloads.append(
+                    {
+                        **self.qdrant.metric_payload(
+                            metric,
+                            user_id=user_id,
+                            dataset_id=dataset_id,
+                            datasource_id=datasource_id,
+                        ),
+                        "embedding_text": text,
+                    }
+                )
+        if texts:
+            vectors = await embedding_client_manager.client.aembed_documents(texts)
+            await self.qdrant.upsert_vectors(self.METRIC_COLLECTION, vectors, payloads)
+        return len(metrics)
 
     async def _index_columns(
         self,

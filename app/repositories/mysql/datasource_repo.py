@@ -44,6 +44,24 @@ class DataSourceRepository:
         )
         return list(result.scalars().all())
 
+    async def update(
+        self,
+        user_id: int,
+        datasource_id: int,
+        *,
+        name: str | None = None,
+        config: dict | None = None,
+    ) -> DataSource | None:
+        row = await self.get(user_id, datasource_id)
+        if row is None:
+            return None
+        if name:
+            row.name = name
+        if config is not None:
+            row.config_enc = encrypt_json(json.dumps(config, ensure_ascii=False))
+        await self.session.flush()
+        return row
+
     async def delete(self, user_id: int, datasource_id: int) -> None:
         from sqlalchemy import delete as sa_delete
 

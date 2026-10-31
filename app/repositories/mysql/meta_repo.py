@@ -1,12 +1,13 @@
 """元数据仓储：表 / 字段 / 指标。"""
 
 import json
+import time
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.entities.meta import ColumnInfoEntity, MetricInfoEntity
-from app.models.meta import ColumnInfo, MetricInfo, TableInfo
+from app.models.meta import ColumnInfo, MetricInfo, TableInfo, TableRelation
 
 # 提问:为什么mysql里要存元数据表,Qdrant里存不够吗
 # 我们先来看point结构:
@@ -180,9 +181,43 @@ class MetaRepository:
         await self.session.flush()
         return result.rowcount or 0
 
+    async def replace_relations(self, dataset_id: int, relations: list[str]) -> int:
+        """整批替换关系，relations 形如 ["fact_order.date_id = dim_date.date_id"]。"""
+        await self.session.execute(
+            text("DELETE FROM table_relation WHERE dataset_id = :d"), {"d": dataset_id}
+        )
+        for item in relations:
+            # str.partition(sep)：按分隔符切一刀，固定返回三元组。
+            left, _, right = item.partition(" = ")
+            from_table, _, from_column = left.partition(".")
+            to_table, _, to_column = right.partition(".")
+            if not (from_table and from_column and to_table and to_column):
+                continue
+            self.session.add(
+                TableRelation(
+                    id=f"{dataset_id}:{left}={right}",
+                    dataset_id=dataset_id,
+                    from_table=from_table,
+                    from_column=from_column,
+                    to_table=to_table,
+                    to_column=to_column,
+                )
+            )
+        await self.session.flush()
+        return len(relations)
+
+    async def list_relations(self, dataset_id: int) -> list[str]:
+        result = await self.session.execute(
+            select(TableRelation).where(TableRelation.dataset_id == dataset_id)
+        )
+        return [
+            f"{row.from_table}.{row.from_column} = {row.to_table}.{row.to_column}"
+            for row in result.scalars().all()
+        ]
+
     async def delete_by_dataset(self, dataset_id: int) -> None:
-        """删掉一个数据集的所有元数据行（column/table/metric）。"""
-        for table in ("column_info", "table_info", "metric_info"):
+        """删掉一个数据集的所有元数据行（column/table/metric/relation）。"""
+        for table in ("column_info", "table_info", "metric_info", "table_relation"):
             await self.session.execute(
                 text(f"DELETE FROM {table} WHERE dataset_id = :d"), {"d": dataset_id}
             )
@@ -192,9 +227,28 @@ class MetaRepository:
         self.session.add_all(rows)
         await self.session.flush()
 
-    async def save_metric(self, metric: MetricInfo) -> None:
-        self.session.add(metric)
+    async def save_metric(self, metric: MetricInfoEntity, dataset_id: int) -> str:
+        """按 (dataset_id, name) upsert，返回指标 id。"""
+        metric_id = f"{dataset_id}:{metric.name}"
+        row = await self.session.get(MetricInfo, metric_id)
+        if row is None:
+            row = MetricInfo(id=metric_id, dataset_id=dataset_id, name=metric.name)
+            self.session.add(row)
+        row.description = metric.description
+        row.expression = metric.expression
+        row.relevant_columns = json.dumps(metric.relevant_columns, ensure_ascii=False)
+        row.alias = json.dumps(metric.alias, ensure_ascii=False)
+        row.created_at = int(time.time())
         await self.session.flush()
+        return metric_id
+
+    async def delete_metric(self, dataset_id: int, metric_id: str) -> bool:
+        row = await self.session.get(MetricInfo, metric_id)
+        if row is None or row.dataset_id != dataset_id:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        return True
 
     # -- 读 --
     async def get_columns_by_ids(
@@ -244,8 +298,10 @@ class MetaRepository:
                 id=row.id,
                 name=row.name,
                 description=row.description,
+                expression=getattr(row, "expression", "") or "",
                 relevant_columns=json.loads(row.relevant_columns or "[]"),
                 alias=json.loads(row.alias or "[]"),
+                dataset_id=row.dataset_id,
             )
             for row in rows
         ]

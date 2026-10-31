@@ -11,6 +11,7 @@ async def recall_value(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
     ctx = runtime.context
     es = ctx["es_repo"]
 
+    question = state.get("question", "")
     found: dict[str, dict] = {}
     for keyword in state["keywords"]:
         hits = await es.search(
@@ -21,8 +22,11 @@ async def recall_value(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> d
             min_score=0.6,
         )
         for hit in hits:
-            # 每一个hit是一个value_info
-            found.setdefault(hit["id"], hit)
+            # 只保留"真的出现在问题里"的值：
+            # ES 是模糊匹配，不校验会让模型凭空加 WHERE 条件
+            value = str(hit.get("value", ""))
+            if value and value in question:
+                found.setdefault(hit["id"], hit)
 
     runtime.stream_writer({"type": "progress", "step": "召回收值", "status": "success"})
     return {"retrieved_value_infos": list(found.values())}

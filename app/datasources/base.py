@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
+# 专门用于获取包装外部数据源元数据的实体
 @dataclass
 class ColumnSchema:
     name: str
@@ -17,8 +18,9 @@ class TableSchema:
     comment: str = ""
     columns: list[ColumnSchema] = field(default_factory=list)
 
-
+# 抽象
 class DataSource(Protocol):
+
     kind: str
     datasource_id: int
 

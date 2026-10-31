@@ -31,6 +31,7 @@ class MySQLDataSource:
         return self.engine
 
     async def test_connection(self) -> None:
+        # 这里没有手动提交事务,因为datasource类只会进行查询的操作,不会写入
         async with self._engine().connect() as conn:
             await conn.execute(text("SELECT 1"))
 

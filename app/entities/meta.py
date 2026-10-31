@@ -27,9 +27,10 @@ class ColumnInfoEntity:
 
 @dataclass
 class MetricInfoEntity:
-    id: str                  # "{dataset_id}:{指标名}" 或指标名
+    id: str                  # "{dataset_id}:{指标名}"
     name: str
     description: str = ""
+    expression: str = ""     # 口径，如 SUM({t_ord.amt}) / COUNT(DISTINCT {t_ord.cust_no})
     relevant_columns: list[str] = field(default_factory=list)
     alias: list[str] = field(default_factory=list)
     dataset_id: int = 0

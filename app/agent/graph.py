@@ -114,7 +114,7 @@ from app.agent.nodes.write_cache import write_cache
 from app.agent.state import Nl2SqlState
 
 MAX_FIX_ROUNDS = 1
-MAX_CHECK_ROUNDS = 1
+MAX_CHECK_ROUNDS = 2
 
 
 async def check_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
@@ -144,7 +144,7 @@ async def check_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> di
     if hit:
         semantic_sql, score = hit
         runtime.stream_writer(
-            {"type": "progress", "step": "语义缓存命中", "status": "success", "score": round(score, 3)}
+            {"type": "progress", "step": "语义缓存命中", "status": "success", "score": round(score, 3)}# 浮点数四舍五入到 3 位小数。
         )
         return {"sql": semantic_sql, "hit_cache": True, "cache_kind": "semantic"}
 

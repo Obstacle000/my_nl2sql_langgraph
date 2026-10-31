@@ -55,6 +55,23 @@ class DatasetSpec(BaseModel):
     # tables = (["orders", "refunds"],)  # None = 全部表
 
 
+class MetricSaveRequest(BaseModel):
+    """指标口径：expression 里用 {表.字段} 占位。"""
+
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    expression: str = ""
+    relevant_columns: list[str] = Field(default_factory=list)
+    alias: list[str] = Field(default_factory=list)
+
+
+class DataSourceUpdateRequest(BaseModel):
+    """只改名字或连接配置；都为空则什么都不做。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    config: DataSourceConfig | None = None
+
+
 class DataSourceCreateRequest(BaseModel):
     kind: str = "mysql"
     name: str = Field(min_length=1, max_length=128)

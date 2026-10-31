@@ -11,7 +11,7 @@ import os
 from cryptography.fernet import InvalidToken
 
 from app.core.crypto import decrypt_json
-from app.core.errors import NotFoundError
+from app.core.errors import AppError, NotFoundError
 from app.core.log import logger
 from app.datasources.mysql_source import MySQLDataSource
 from app.entities.meta import ColumnInfoEntity
@@ -21,8 +21,9 @@ from app.repositories.mysql.datasource_repo import DataSourceRepository
 from app.repositories.mysql.meta_repo import MetaRepository
 from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
 from app.repositories.qdrant.meta_qdrant_repo import MetaQdrantRepository
-from app.services.meta_alias import generate_aliases
+from app.services.meta_alias import generate_column_meta
 from app.services.meta_index_service import MetaIndexService
+from app.services.meta_relation import generate_relations
 
 COLUMN_COLLECTION = MetaIndexService.COLUMN_COLLECTION
 class DatasourceService:
@@ -100,6 +101,9 @@ class DatasourceService:
         columns = await self._persist_schema(
             dataset.id, selected, datasource.id, samples=samples
         )
+        # 表关系建源时推断一次（存 table_relation），问数时直接读，不再每次调 LLM
+        relations = await generate_relations(selected, self._infer_roles(selected), samples)
+        await self.meta_repo.replace_relations(dataset.id, relations)
         await self.repo.set_status(datasource.id, "ok")
         # 把这个数据集的元数据从 MySQL 读出来，重新生成 Qdrant 向量和 ES 索引。
         await self.index_service.reindex_dataset(user_id, dataset.id, datasource_id=datasource.id)
@@ -297,7 +301,7 @@ class DatasourceService:
             to_update: list[ColumnInfoEntity] = []
             for col in schema.columns:
                 entity = ColumnInfoEntity(
-                    id=f"{schema.name}.{col.name}",
+                    id=f"{dataset.id}:{schema.name}.{col.name}",
                     table_id=schema.name,
                     name=col.name,
                     type=col.type,
@@ -344,6 +348,11 @@ class DatasourceService:
         )
         if changed:
             await self.dataset_repo.bump_schema_version(dataset.id)
+            # 结构变了，关系也重算一次
+            relations = await generate_relations(
+                schemas, self._infer_roles(schemas), samples
+            )
+            await self.meta_repo.replace_relations(dataset.id, relations)
             # 把一个数据集的所有字段重新向量化 + 重建取值索引
             await self.index_service.reindex_dataset(user_id, dataset.id, datasource_id)
 
@@ -358,6 +367,41 @@ class DatasourceService:
             "dropped_tables": dropped_tables,
             "schema_version": latest.schema_version if latest else 0,
         }
+    # ---- 修改配置：先验证连接，再落库 ----
+    async def update(
+        self,
+        user_id: int,
+        datasource_id: int,
+        *,
+        name: str | None = None,
+        config: dict | None = None,
+    ) -> dict[str, object]:
+        row = await self.repo.get(user_id, datasource_id)
+        if row is None:
+            raise NotFoundError("数据源不存在")
+        if name is None and config is None:
+            raise AppError("没有需要修改的内容")
+
+        if config is not None:
+            if row.kind != "mysql":
+                raise AppError("只有 MySQL 数据源支持修改连接配置")
+            probe = MySQLDataSource(0, config)
+            try:
+                await probe.test_connection()
+            except Exception as exc:
+                raise AppError(f"连接失败：{exc}") from exc
+            finally:
+                if probe.engine is not None:
+                    await probe.engine.dispose()
+
+        updated = await self.repo.update(user_id, datasource_id, name=name, config=config)
+        return {
+            "datasource_id": datasource_id,
+            "name": updated.name if updated else name,
+            "kind": row.kind,
+            "config_changed": config is not None,
+        }
+
     # ---- 删除（级联）----
     async def delete(self, user_id: int, datasource_id: int) -> dict[str, object]:
         row = await self.repo.get(user_id, datasource_id)
@@ -467,19 +511,25 @@ class DatasourceService:
             # 存dataset_tables
             await self.dataset_repo.add_table(dataset_id, schema.name, schema.name, 0)
 
-            # 生成中文别名（每表 1 次 LLM 调用）→ 每个别名进 Qdrant 一条向量
-            aliases = await generate_aliases(schema, samples)
+            # 生成业务描述 + 中文别名（每表 1 次 LLM 调用）
+            # description 决定 Qdrant 第一条向量的语义，alias 每个生成一条向量
+            metas = await generate_column_meta(schema, samples)
 
             table_columns: list[ColumnInfoEntity] = [
                 ColumnInfoEntity(
-                    id=f"{schema.name}.{col.name}",
+                    # id 带上 dataset_id：不同数据集可能有同名表/字段
+                    id=f"{dataset_id}:{schema.name}.{col.name}",
                     table_id=schema.name,
                     name=col.name,
                     type=col.type,
                     role=roles.get(f"{schema.name}.{col.name}", "dimension"),
-                    description=col.comment or col.name,
+                    description=(
+                        col.comment
+                        or metas.get(col.name, {}).get("description")
+                        or col.name
+                    ),
                     examples=samples.get(f"{schema.name}.{col.name}", []),
-                    alias=aliases.get(col.name, []),
+                    alias=metas.get(col.name, {}).get("alias", []),
                     dataset_id=dataset_id,
                     datasource_id=datasource_id,
                 )
@@ -489,7 +539,7 @@ class DatasourceService:
             # 存table_info
             await self.meta_repo.save_table_with_columns(
                 dataset_id,
-                schema.name,
+                f"{dataset_id}:{schema.name}",
                 schema.name,
                 "fact",
                 schema.comment or schema.name,

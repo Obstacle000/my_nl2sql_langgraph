@@ -6,11 +6,17 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     CurrentUser,
+    DatasourceRegistryDep,
     QdrantRepositoryDep,
     SessionDep,
     ValueESRepositoryDep,
 )
-from app.api.schemas import DataSourceCreateRequest, DataSourceProbeRequest, SyncRequest
+from app.api.schemas import (
+    DataSourceCreateRequest,
+    DataSourceProbeRequest,
+    DataSourceUpdateRequest,
+    SyncRequest,
+)
 from app.repositories.mysql.dataset_repo import DatasetRepository
 from app.repositories.mysql.datasource_repo import DataSourceRepository
 from app.repositories.mysql.meta_repo import MetaRepository
@@ -87,6 +93,29 @@ async def list_datasources(user_id: CurrentUser, service: DatasourceServiceDep) 
     return {"datasources": await service.list_datasources(user_id)}
 
 
+@router.put("/{datasource_id}")
+async def update_datasource(
+    datasource_id: int,
+    body: DataSourceUpdateRequest,
+    user_id: CurrentUser,
+    session: SessionDep,
+    service: DatasourceServiceDep,
+    registry: DatasourceRegistryDep,
+) -> dict:
+    """改名字或连接配置；传了 config 会先测连接。"""
+    async with session.begin():
+        result = await service.update(
+            user_id,
+            datasource_id,
+            name=body.name,
+            config=body.config.model_dump() if body.config else None,
+        )
+    if body.config is not None:
+        # 配置变了，踢掉进程内缓存的连接池，避免继续用旧引擎
+        await registry.invalidate(user_id, datasource_id)
+    return result
+
+
 @router.post("/{datasource_id}/test")
 async def test_connection(
     datasource_id: int, user_id: CurrentUser, service: DatasourceServiceDep
@@ -124,6 +153,10 @@ async def delete_datasource(
     user_id: CurrentUser,
     session: SessionDep,
     service: DatasourceServiceDep,
+    registry: DatasourceRegistryDep,
 ) -> dict:
     async with session.begin():
-        return await service.delete(user_id, datasource_id)
+        result = await service.delete(user_id, datasource_id)
+    # 删完把进程内缓存的连接池一起释放，避免"删了还在用旧引擎"
+    await registry.invalidate(user_id, datasource_id)
+    return result

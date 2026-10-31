@@ -26,13 +26,5 @@ async def run_sql(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
     rows = await runtime.context["source"].execute(state.get("sql", ""), limit=1000)
     rows = [_jsonable(r) for r in rows]
     runtime.stream_writer({"type": "progress", "step": "执行SQL", "status": "success"})
-    runtime.stream_writer(
-        {
-            "type": "result",
-            "data": rows,
-            "sql": state.get("sql", ""),
-            "hit_cache": bool(state.get("hit_cache")),
-            "cache_kind": state.get("cache_kind", "miss"),
-        }
-    )
+    # result 帧统一在 write_cache 发送（自检之后），避免重试时重复推送
     return {"rows": rows}

@@ -19,6 +19,20 @@ class DataSourceRegistry:
         self.mysql_manager = mysql_manager # 查我们的库用的
         self._cache: OrderedDict[tuple[int, int], DataSource] = OrderedDict()
 
+    async def invalidate(self, user_id: int, datasource_id: int) -> None:
+        """数据源配置变更 / 删除后调用：踢掉缓存并释放连接池。
+
+        只删 dict 不够——MySQLDataSource 里持有 engine（连接池），
+        不 dispose 会一直占着连接，而且旧配置会继续生效。
+        """
+        key = (user_id, datasource_id)
+        source = self._cache.pop(key, None)
+        if source is None:
+            return
+        engine = getattr(source, "engine", None)
+        if engine is not None:
+            await engine.dispose()
+
     async def get(self, user_id: int, dataset_id: int) -> DataSource:
         """按“数据集”取数据源：数据集决定查哪个源、哪些表。"""
         # factory可以复用

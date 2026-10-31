@@ -1,35 +1,11 @@
+import re
+
 """合并三路召回：去重 → 补指标依赖字段 → 命中值标注 → 补主外键 → 按表聚合。"""
 
-import yaml
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
 from app.agent.context import Nl2SqlContext
-from app.agent.llm import llm
 from app.agent.state import Nl2SqlState
-from app.core.log import logger
-from app.prompt.prompt_loader import load_prompt
-
-
-async def infer_relations(
-    foreign_keys: list[dict], primary_keys: list[dict]
-) -> list[str]:
-    """让 LLM 根据 role + examples 判断外键指向哪个主键，返回 "a.b = c.d" 列表。"""
-    prompt = PromptTemplate(
-        template=load_prompt("infer_relations"),
-        input_variables=["foreign_keys", "primary_keys"],
-    )
-    chain = prompt | llm | JsonOutputParser()
-    mapping = await chain.ainvoke(
-        {
-            "foreign_keys": yaml.dump(foreign_keys, allow_unicode=True, sort_keys=False),
-            "primary_keys": yaml.dump(primary_keys, allow_unicode=True, sort_keys=False),
-        }
-    )
-    if not isinstance(mapping, dict):
-        return []
-    return [f"{fk} = {pk}" for fk, pk in mapping.items() if isinstance(pk, str) and pk]
 
 
 async def merge_retrieved_info(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> dict:
@@ -94,6 +70,26 @@ async def merge_retrieved_info(state: Nl2SqlState, runtime: Runtime[Nl2SqlContex
                         "alias": key.alias,
                     }
                 )
+        # 日期类字段必补：召回经常漏掉 dt/date_id，而时间过滤必须用它
+        existing = {c["name"] for c in cols}
+        for column in await meta.list_columns_by_table(dataset_id, table_id):
+            if column.name in existing:
+                continue
+            if not re.search(r"date|dt|time|day|month|year", column.name, re.IGNORECASE):
+                continue
+            cols.append(
+                {
+                    "id": column.id,
+                    "table_id": column.table_id,
+                    "name": column.name,
+                    "type": column.type,
+                    "role": column.role,
+                    "description": column.description,
+                    "examples": column.examples,
+                    "alias": column.alias,
+                }
+            )
+
         # 进 prompt 的 examples 只留前 3 个（ES 里仍是全量，用于值召回）
         trimmed_cols = [
             {**column, "examples": (column.get("examples") or [])[:3]} for column in cols
@@ -108,34 +104,15 @@ async def merge_retrieved_info(state: Nl2SqlState, runtime: Runtime[Nl2SqlContex
         )
 
 
-    # ⑥ 表间关系：没有真实外键约束，用 LLM 看 role + examples 推断
-    relations: list[str] = []
-    foreign_keys: list[dict] = []
-    primary_keys: list[dict] = []
-    for table in table_infos:
-        for column in table["columns"]:
-            item = {
-                "column": f"{table['name']}.{column['name']}",
-                "type": column.get("type", ""),
-                "examples": (column.get("examples") or [])[:3],
-            }
-            if column.get("role") == "foreign_key":
-                foreign_keys.append(item)
-            elif column.get("role") == "primary_key":
-                primary_keys.append(item)
+    # ⑥ 表间关系：建源时已推断并存入 table_relation，这里直接读（不再每次调 LLM）
+    relations = await meta.list_relations(dataset_id)
 
-    # 只有一个表或没有外键就不花这次 token
-    if foreign_keys and primary_keys and len(table_infos) > 1:
-        try:
-            relations = await infer_relations(foreign_keys, primary_keys)
-        except Exception as exc:  # noqa: BLE001 - 推断失败不影响主流程
-            logger.warning(f"关系推断失败，跳过：{exc}")
-            relations = []
     # metrics
     metrics = [
         {
             "name": m["name"],
             "description": m.get("description", ""),
+            "expression": m.get("expression", ""),
             "relevant_columns": m.get("relevant_columns", []),
             "alias": m.get("alias", []),
         }
