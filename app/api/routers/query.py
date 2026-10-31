@@ -66,6 +66,10 @@ async def query(
                     "sql": assistant_msg.sql,
                 }
             )
+        # 最近一次反问单独传给改写节点（不塞进 history，避免被抄进问题）
+        last_clarify_row = await conversation_repo.last_clarify(body.conversation_id)
+        last_clarify = last_clarify_row.content if last_clarify_row is not None else ""
+        clarify_rounds = await conversation_repo.count_clarify(body.conversation_id)
 
     source = await registry.get(user_id, body.dataset_id)
 
@@ -93,6 +97,8 @@ async def query(
         started_at=time.time(),
         conversation_id=body.conversation_id,
         history=history,
+        clarify_rounds=clarify_rounds,
+        last_clarify=last_clarify,
     )
 
     async def stream():
@@ -126,7 +132,7 @@ async def query(
             async with factory() as save_session:
                 repo = ConversationRepository(save_session)
                 await repo.add_message(
-                    body.conversation_id, role="user", content=body.question
+                    body.conversation_id, role="user", content=body.question, msg_type="ask"
                 )
                 await repo.add_message(
                     body.conversation_id,

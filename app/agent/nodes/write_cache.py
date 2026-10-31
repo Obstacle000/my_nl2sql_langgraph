@@ -62,6 +62,7 @@ async def write_cache(state: Nl2SqlState, runtime: Runtime[Nl2SqlContext]) -> di
             "hit_cache": bool(state.get("hit_cache")),
             "cache_kind": state.get("cache_kind", "miss"),
             "suspect_reason": suspect,
+            "assumed": state.get("assumed") or None,
         }
     )
     runtime.stream_writer({"type": "progress", "step": "写缓存", "status": "success"})

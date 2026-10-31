@@ -14,6 +14,9 @@ class Nl2SqlState(TypedDict, total=False):
     complete: bool                     # False 表示信息不全，走反问
     missing: str                       # 缺什么（"时间范围"）
     context_sig: str                   # 本轮继承条件的指纹（空=无上下文，与单轮共用缓存）
+    clarify_rounds: int                # 本会话已反问次数（>=2 不再追问）
+    last_clarify: str                  # 上一轮系统问了什么（用户这句可能是在回答它）
+    assumed: dict[str, Any]            # 连续反问后采用的默认假设
     user_id: int
     dataset_id: int
     schema_version: int
