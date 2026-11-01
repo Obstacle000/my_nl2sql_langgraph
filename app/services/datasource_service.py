@@ -113,11 +113,12 @@ class DatasourceService:
         await self.meta_repo.replace_relations(dataset.id, relations)
         # 关系确定后，把两端的 role 标成外键 / 主键
         await self.meta_repo.update_column_roles(
+            # 增量更新llm推断的
             dataset.id, relations_to_roles(dataset.id, relations)
         )
         await self.repo.set_status(datasource.id, "ok")
 
-        # 把这个数据集的元数据从 MySQL 读出来，重新生成 Qdrant 向量和 ES 索引。
+        # 把这个数据集的元数据从 MySQL 读出来，生成 Qdrant 向量和 ES 索引。
         await self.index_service.reindex_dataset(user_id, dataset.id, datasource_id=datasource.id)
         if source.engine is not None:
             await source.engine.dispose()
@@ -297,10 +298,12 @@ class DatasourceService:
         ]
         if new_schemas:
             await self._persist_schema(
-                dataset.id, new_schemas, datasource_id, samples=samples
+                dataset.id, new_schemas, datasource_id, samples=samples,
+                execute=source.execute,
             )
 
         # ② 已有表：加新列、更新类型，删列
+        roles = await self._infer_roles(schemas, source.execute, samples)
         added_columns = 0
         updated_columns = 0
         dropped_columns = 0
@@ -317,7 +320,11 @@ class DatasourceService:
                     table_id=schema.name,
                     name=col.name,
                     type=col.type,
-                    role=local_map[col.name].role if col.name in local_map else "dimension",
+                    role=(
+                        local_map[col.name].role
+                        if col.name in local_map
+                        else roles.get(f"{schema.name}.{col.name}", "dimension")
+                    ),
                     description=col.comment or col.name,
                     examples=samples.get(f"{schema.name}.{col.name}", []),
                     alias=[],
@@ -369,6 +376,9 @@ class DatasourceService:
                 roles=await self._infer_roles(schemas, source.execute, samples),
             )
             await self.meta_repo.replace_relations(dataset.id, relations)
+            await self.meta_repo.update_column_roles(
+                dataset.id, relations_to_roles(dataset.id, relations)
+            )
             # 把一个数据集的所有字段重新向量化 + 重建取值索引
             await self.index_service.reindex_dataset(user_id, dataset.id, datasource_id)
 
@@ -460,9 +470,10 @@ class DatasourceService:
         schemas,
         datasource_id: int = 0,
         samples: dict[str, list] | None = None,
+        execute=None,
     ) -> list[ColumnInfoEntity]:
         samples = samples or {}
-        roles = await self._infer_roles(schemas)
+        roles = await self._infer_roles(schemas, execute, samples)
         columns: list[ColumnInfoEntity] = []
         for schema in schemas:
             # 存dataset_tables

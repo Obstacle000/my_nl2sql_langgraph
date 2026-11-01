@@ -146,6 +146,7 @@ class MetaRepository:
                 continue
             row.type = col.type
             row.description = col.description
+            row.role = col.role
         await self.session.flush()
         return len(columns)
 

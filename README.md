@@ -1,6 +1,29 @@
 # my-nl2sql
 
-多用户 NL2SQL：接入数据源（CSV 上传 / MySQL 直连）→ 三路召回（Qdrant / ES / MySQL）→ LLM 生成 SQL → 校验修正 → 只读执行 → Redis 两级缓存。
+多用户 NL2SQL：接入数据源（CSV 上传 / MySQL 直连）→ 三路召回（Qdrant / ES / MySQL）→ LLM 生成 SQL → 校验修正 → 只读执行 → Redis 两级缓存；支持多轮追问与澄清反问，支持指标口径，元数据（含表关系）自动推断。
+
+## 主要能力
+
+```text
+· 数据源：MySQL 直连 / CSV 上传（一个数据集可传多张表），凭证 Fernet 加密
+· 元数据：字段/表说明由 LLM 生成，主外键用「数据库约束 → 值域包含 → LLM 提议+校验」三层推断
+· 召回：字段/指标向量（Qdrant）+ 取值（ES）+ 关键词（MySQL）三路合并
+· 生成：按表裁剪 prompt，指标口径优先，命中取值强制带上
+· 自检：7 条规则（空结果、全表扫、时间打在编号列等），最多重试 2 次，仍可疑则标 suspect 且不写缓存
+· 缓存：精确 + 语义两级，key 带 schema_version 和 context_sig；销售额/销量这类度量词命中前做护栏
+· 多轮：会话 + 消息表，改写节点产出独立问题；信息不全时反问；连续两次不明确则按默认假设执行
+```
+
+## 评测结果（2026-11-01）
+
+| 套件 | 题量 | 结果 | p50 |
+| --- | --- | --- | --- |
+| dw（5 表 24 字段） | 50 | 50/50 = 100% | 4.3s |
+| demo_retail（命名不规范） | 18 | 18/18 = 100% | 4.2s |
+| 指标专项 | 12 | 12/12 = 100% | — |
+| 缓存专项（6 组断言） | 6 | 6/6 = 100% | 命中 0.24s |
+
+详见 [测试记录](docs/测试记录1+问题.md)。
 
 ## 文档
 
@@ -9,7 +32,7 @@
 | [立项文档](docs/立项文档.md) | 问题、场景、成功标准、范围、风险、里程碑 |
 | [需求文档](docs/需求文档.md) | 功能清单（P0/P1/P2）、流程、验收条件、评测规划 |
 | [数据库结构](docs/数据库结构.md) | 表结构、索引、多租户规则、Qdrant/ES/Redis 结构 |
-| [接口文档](docs/接口文档.md) | 13 个已实现接口、SSE 协议、错误码、规划中接口 |
+| [接口文档](docs/接口文档.md) | 22 个已实现接口、SSE 协议、多轮会话、错误码 |
 | [架构设计](docs/架构设计.md) | 分层、两层鉴权、主链路、关键决策、排障 |
 
 ## 快速开始
@@ -71,7 +94,7 @@ app/
 ├── entities/      业务实体（与 ORM 解耦，供 Agent 使用）
 ├── datasources/   DataSource 协议 + CSV / MySQL 实现 + registry（LRU）
 ├── repositories/  mysql（user/dataset/datasource/meta/history）、qdrant、es、redis
-├── services/      auth / dataset / datasource / meta_index
+├── services/      auth / dataset / datasource / meta_index / meta_builder / meta_relation
 ├── agent/         LangGraph：state / context / graph
 └── api/           deps（Annotated 依赖）、lifespan、routers、schemas
 ```
@@ -80,19 +103,21 @@ app/
 
 | 模块 | 状态 |
 | --- | --- |
-| 配置 / 客户端 / ORM / 迁移（create_all） | ✅ |
+| 配置 / 客户端 / ORM / 建表 | ✅ |
 | 注册登录 / JWT / 两层鉴权 / 滑动续签 | ✅ |
-| 数据源：probe、创建、列表、测试、同步、删除 | ✅ |
-| CSV：建数据集、上传建表、写元数据、建索引 | ✅ |
-| Qdrant 字段向量 + ES 取值索引（带租户字段） | ✅ |
-| Redis 精确 + 语义缓存仓储 | ✅ 仓储层 |
-| SSE 输出（progress / result / error） | ✅ |
-| LangGraph 图 | ⚠️ 5 节点中 4 个是占位 |
-| 召回 / 生成 / 校验 / 执行 | ⬜ 待实现 |
-| 缓存写回、审计落库 | ⬜ 待实现 |
-| 前端、测试、评测集 | ⬜ 待实现 |
-
-> 详细清单见 [需求文档](docs/需求文档.md) 与 [接口文档](docs/接口文档.md) 的「实现状态总览」。
+| 数据源：probe、创建、列表、测试、同步、修改、删除 | ✅ |
+| CSV：建数据集、多表上传、元数据、关系推断、增量索引 | ✅ |
+| 元数据：LLM 描述/别名、主外键推断（约束 → 值域 → LLM） | ✅ |
+| Qdrant 字段/指标向量 + ES 取值索引（带租户字段） | ✅ |
+| Redis 精确 + 语义缓存 + 上下文指纹 + 度量护栏 | ✅ |
+| LangGraph：改写 → 缓存 → 三路召回 → 裁剪 → 生成 → 校验 → 自检 → 执行 → 写缓存 | ✅ |
+| 多轮会话：conversations/messages、澄清反问、默认假设 | ✅ |
+| 指标：列表/新建/删除/LLM 草稿/口径注入 | ✅ |
+| SSE（progress / rewritten / clarify / result / error） | ✅ |
+| 评测集（dw 50 / demo 18 / 指标 12 / 缓存 6） | ✅ |
+| pytest 单元测试 | ⬜ 待补 |
+| 前端 | ⬜ 待做 |
+| 只读数据库账号 | ⚠️ 当前用数据源配置账号，仅靠 SELECT 白名单 |
 
 ## 关键约定
 

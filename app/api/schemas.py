@@ -101,6 +101,8 @@ class TableCreateResponse(BaseModel):
 
 
 class SyncRequest(BaseModel):
-    """同步 schema 时用户勾选要新增的表；不传表示全部新增。"""
+    """同步 schema 时的选项；tables 不传表示全部新增。"""
 
     tables: list[str] | None = None
+    drop_columns: bool = False   # 源库删了列，是否同步删除元数据
+    drop_tables: bool = False    # 源库删了表，是否同步删除元数据
