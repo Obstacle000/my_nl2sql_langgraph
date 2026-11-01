@@ -48,6 +48,8 @@ async def query(
         raise NotFoundError("数据集不存在")
 
     history: list[dict] = []
+    clarify_rounds = 0
+    last_clarify = ""
     if body.conversation_id:
         conversation = await conversation_repo.get(user_id, body.conversation_id)
         if conversation is None:

@@ -10,6 +10,7 @@ class ColumnSchema:
     name: str
     type: str
     comment: str = ""
+    primary: bool = False        # 是否真实主键（information_schema.COLUMN_KEY='PRI'）
 
 
 @dataclass

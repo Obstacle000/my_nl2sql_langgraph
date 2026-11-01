@@ -37,16 +37,21 @@ class MySQLDataSource:
 
     async def discover_schema(self) -> list[TableSchema]:
         sql = text(
-            "SELECT table_name, column_name, column_type, column_comment "
+            "SELECT table_name, column_name, column_type, column_comment, column_key "
             "FROM information_schema.columns "
             "WHERE table_schema = :db ORDER BY table_name, ordinal_position"
         )
         grouped: dict[str, TableSchema] = {}
         async with self._engine().connect() as conn:
             rows = await conn.execute(sql, {"db": self.config["database"]})
-            for table_name, column_name, column_type, comment in rows:
+            for table_name, column_name, column_type, comment, column_key in rows:
                 grouped.setdefault(table_name, TableSchema(name=table_name)).columns.append(
-                    ColumnSchema(name=column_name, type=column_type, comment=comment or "")
+                    ColumnSchema(
+                        name=column_name,
+                        type=column_type,
+                        comment=comment or "",
+                        primary=(column_key or "").upper() == "PRI",
+                    )
                 )
         return list(grouped.values())
 

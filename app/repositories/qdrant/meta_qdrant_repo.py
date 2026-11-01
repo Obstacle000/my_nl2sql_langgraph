@@ -77,6 +77,29 @@ class MetaQdrantRepository:
             points_selector=models.FilterSelector(filter=self._filter(user_id, dataset_id)),
         )
 
+    async def delete_by_table(
+        self, name: str, user_id: int, dataset_id: int, table_id: str
+    ) -> None:
+        """只删某张表的向量（增量索引用）。"""
+        await self.client.delete(
+            collection_name=name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="user_id", match=models.MatchValue(value=user_id)
+                        ),
+                        models.FieldCondition(
+                            key="dataset_id", match=models.MatchValue(value=dataset_id)
+                        ),
+                        models.FieldCondition(
+                            key="table_id", match=models.MatchValue(value=table_id)
+                        ),
+                    ]
+                )
+            ),
+        )
+
     @staticmethod
     def column_payload(
         column: ColumnInfoEntity, user_id: int, dataset_id: int, datasource_id: int = 0

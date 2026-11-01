@@ -1,45 +1,16 @@
 """数据集接口：服务由仓储装配而来。"""
 
-from pathlib import Path
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 
 from app.api.deps import (
     CurrentUser,
     DatasetRepositoryDep,
-    QdrantRepositoryDep,
+    DatasetServiceDep,
     SessionDep,
-    ValueESRepositoryDep,
 )
 from app.api.schemas import DatasetCreateRequest, DatasetCreateResponse, TableCreateResponse
-from app.repositories.mysql.meta_repo import MetaRepository
-from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
-from app.services.dataset_service import DatasetService
-from app.services.meta_index_service import MetaIndexService
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
-
-UPLOAD_DIR = Path("data/uploads")
-
-
-def get_dataset_service(
-    session: SessionDep,
-    dataset_repo: DatasetRepositoryDep,
-    qdrant: QdrantRepositoryDep,
-    es: ValueESRepositoryDep,
-) -> DatasetService:
-    meta_repo = MetaRepository(session)
-    return DatasetService(
-        dataset_repo=dataset_repo,
-        meta_repo=meta_repo,
-        physical_repo=PhysicalTableRepository(session),
-        index_service=MetaIndexService(qdrant, es, meta_repo),
-        upload_dir=UPLOAD_DIR,
-    )
-
-
-DatasetServiceDep = Annotated[DatasetService, Depends(get_dataset_service)]
 
 
 @router.get("")

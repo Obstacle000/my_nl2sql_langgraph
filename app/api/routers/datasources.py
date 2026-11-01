@@ -1,15 +1,12 @@
 """数据源接口：服务由仓储装配而来。"""
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from app.api.deps import (
     CurrentUser,
     DatasourceRegistryDep,
-    QdrantRepositoryDep,
+    DatasourceServiceDep,
     SessionDep,
-    ValueESRepositoryDep,
 )
 from app.api.schemas import (
     DataSourceCreateRequest,
@@ -17,12 +14,6 @@ from app.api.schemas import (
     DataSourceUpdateRequest,
     SyncRequest,
 )
-from app.repositories.mysql.dataset_repo import DatasetRepository
-from app.repositories.mysql.datasource_repo import DataSourceRepository
-from app.repositories.mysql.meta_repo import MetaRepository
-from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
-from app.services.datasource_service import DatasourceService
-from app.services.meta_index_service import MetaIndexService
 
 router = APIRouter(prefix="/api/datasources", tags=["datasources"])
 
@@ -37,26 +28,6 @@ public_router = APIRouter(
 async def list_templates() -> dict:
     """示例：不需要登录的接口。"""
     return {"templates": [{"name": "订单模板"}, {"name": "会员模板"}]}
-
-
-def get_datasource_service(
-    session: SessionDep,
-    qdrant: QdrantRepositoryDep,
-    es: ValueESRepositoryDep,
-) -> DatasourceService:
-    meta_repo = MetaRepository(session)
-    return DatasourceService(
-        datasource_repo=DataSourceRepository(session),
-        dataset_repo=DatasetRepository(session),
-        meta_repo=meta_repo,
-        physical_repo=PhysicalTableRepository(session),
-        index_service=MetaIndexService(qdrant, es, meta_repo),
-        qdrant=qdrant,
-        es=es,
-    )
-
-
-DatasourceServiceDep = Annotated[DatasourceService, Depends(get_datasource_service)]
 
 
 @router.post("/probe")

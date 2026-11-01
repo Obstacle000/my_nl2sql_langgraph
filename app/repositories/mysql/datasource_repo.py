@@ -10,6 +10,7 @@ from app.core.crypto import decrypt_json, encrypt_json
 from app.models.datasource import DataSource
 
 
+# 这个不是处理外部数据源的,而是存数据源表的
 class DataSourceRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

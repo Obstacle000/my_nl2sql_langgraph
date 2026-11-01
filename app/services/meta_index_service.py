@@ -36,6 +36,23 @@ class MetaIndexService:
         await self.reindex_metrics(user_id, dataset_id, datasource_id)
         return len(columns)
 
+    async def index_table(
+        self,
+        user_id: int,
+        dataset_id: int,
+        table_id: str,
+        datasource_id: int = 0,
+    ) -> int:
+        """只重建一张表的向量（CSV 上传后调用，避免整库重建）。"""
+        await self.qdrant.delete_by_table(
+            self.COLUMN_COLLECTION, user_id, dataset_id, table_id
+        )
+        columns = await self.meta_repo.list_columns_by_table(
+            dataset_id, table_id, datasource_id
+        )
+        await self._index_columns(user_id, dataset_id, datasource_id, columns)
+        return len(columns)
+
     async def reindex_metrics(
         self, user_id: int, dataset_id: int, datasource_id: int = 0
     ) -> int:
