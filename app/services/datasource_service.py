@@ -24,7 +24,7 @@ from app.repositories.qdrant.meta_qdrant_repo import MetaQdrantRepository
 from app.services.meta_alias import generate_column_meta
 from app.services.meta_builder import collect_samples, infer_roles
 from app.services.meta_index_service import MetaIndexService
-from app.services.meta_relation import generate_relations
+from app.services.meta_relation import resolve_relations
 
 COLUMN_COLLECTION = MetaIndexService.COLUMN_COLLECTION
 class DatasourceService:
@@ -103,7 +103,13 @@ class DatasourceService:
             dataset.id, selected, datasource.id, samples=samples
         )
         # 表关系建源时推断一次（存 table_relation），问数时直接读，不再每次调 LLM
-        relations = await generate_relations(selected, self._infer_roles(selected), samples)
+        relations = await resolve_relations(
+            selected,
+            source.execute,
+            samples,
+            source=source,
+            roles=self._infer_roles(selected),
+        )
         await self.meta_repo.replace_relations(dataset.id, relations)
         await self.repo.set_status(datasource.id, "ok")
 
@@ -350,9 +356,13 @@ class DatasourceService:
         )
         if changed:
             await self.dataset_repo.bump_schema_version(dataset.id)
-            # 结构变了，关系也重算一次
-            relations = await generate_relations(
-                schemas, self._infer_roles(schemas), samples
+            # 结构变了，关系也按三层策略重算
+            relations = await resolve_relations(
+                schemas,
+                source.execute,
+                samples,
+                source=source,
+                roles=self._infer_roles(schemas),
             )
             await self.meta_repo.replace_relations(dataset.id, relations)
             # 把一个数据集的所有字段重新向量化 + 重建取值索引

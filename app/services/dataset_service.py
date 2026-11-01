@@ -17,6 +17,7 @@ from app.repositories.mysql.meta_repo import MetaRepository
 from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
 from app.services.meta_builder import collect_samples_table, enrich_columns, infer_roles
 from app.services.meta_index_service import MetaIndexService
+from app.services.meta_relation import resolve_relations
 
 MAX_ROWS = 100_000
 
@@ -145,11 +146,14 @@ class DatasetService:
                 columns,
             )
 
+            # ③.5 CSV 多表关系：同名列 + 值域重合率高 → 认为可 JOIN
+            await self._rebuild_csv_relations(dataset_id)
+
             # ④ 索引：只索引这张新表，不重建整个数据集
             await self.index_service.index_table(
                 user_id,
                 dataset_id,
-                f"{dataset_id}:{physical}",
+                physical,
                 datasource_id=dataset.datasource_id or 0,
             )
         except Exception:
@@ -174,6 +178,27 @@ class DatasetService:
             "rows": len(frame),
             "columns": len(columns),
         }
+
+    async def _rebuild_csv_relations(self, dataset_id: int) -> int:
+        """CSV 没有主外键：用"值域包含 + 主键唯一"推断关系。"""
+        columns = await self.meta_repo.list_columns(dataset_id)
+        by_table: dict[str, list[ColumnSchema]] = {}
+        samples: dict[str, list] = {}
+        for column in columns:
+            physical = column.table_id.split(":", 1)[-1]
+            by_table.setdefault(physical, []).append(
+                ColumnSchema(name=column.name, type=column.type)
+            )
+            samples[f"{physical}.{column.name}"] = column.examples or []
+
+        schemas = [
+            TableSchema(name=table, columns=cols) for table, cols in by_table.items()
+        ]
+        relations = await resolve_relations(
+            schemas, self.physical_repo.execute_select, samples
+        )
+        await self.meta_repo.replace_relations(dataset_id, relations)
+        return len(relations)
 
     # -- 纯函数（无 IO） --
 
@@ -234,17 +259,16 @@ class DatasetService:
         ]
         roles = infer_roles(schemas)
 
-        # 与 MySQL 路径保持一致：id / table_id 都带 dataset 前缀
-        table_id = f"{dataset_id}:{physical}"
-
+        # 与 MySQL 路径一致：id 带 dataset 前缀，table_id 保持物理表名
+        # （table_id 会作为 SQL 里的表名进 prompt，不能带前缀）
         columns: list[ColumnInfoEntity] = []
         for col in frame.columns:
             series = frame[col]
             safe_name = cls._safe_col(col)
             columns.append(
                 ColumnInfoEntity(
-                    id=f"{table_id}.{safe_name}",
-                    table_id=table_id,
+                    id=f"{dataset_id}:{physical}.{safe_name}",
+                    table_id=physical,
                     name=safe_name,
                     type=cls._sql_type(series),
                     role=roles.get(f"{physical}.{safe_name}", "dimension"),
