@@ -149,6 +149,20 @@ class MetaRepository:
         await self.session.flush()
         return len(columns)
 
+    async def update_column_roles(self, dataset_id: int, roles: dict[str, str]) -> int:
+        """按 column.id 批量更新 role（primary_key / foreign_key）。"""
+        if not roles:
+            return 0
+        updated = 0
+        for column_id, role in roles.items():
+            row = await self.session.get(ColumnInfo, column_id)
+            if row is None or row.dataset_id != dataset_id:
+                continue
+            row.role = role
+            updated += 1
+        await self.session.flush()
+        return updated
+
     async def delete_table_meta(self, dataset_id: int, table_id: str) -> int:
         """删一张表的元数据行（table_info + column_info）。"""
         deleted = 0

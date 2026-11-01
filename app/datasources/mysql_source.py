@@ -43,6 +43,17 @@ class MySQLDataSource:
         )
         grouped: dict[str, TableSchema] = {}
         async with self._engine().connect() as conn:
+            # 先取真实外键，给字段打上 foreign 标记（没有约束就是空集合）
+            fk_rows = await conn.execute(
+                text(
+                    "SELECT table_name, column_name "
+                    "FROM information_schema.KEY_COLUMN_USAGE "
+                    "WHERE table_schema = :db AND referenced_table_name IS NOT NULL"
+                ),
+                {"db": self.config["database"]},
+            )
+            foreign_columns = {(row[0], row[1]) for row in fk_rows}
+
             rows = await conn.execute(sql, {"db": self.config["database"]})
             for table_name, column_name, column_type, comment, column_key in rows:
                 grouped.setdefault(table_name, TableSchema(name=table_name)).columns.append(
@@ -51,6 +62,7 @@ class MySQLDataSource:
                         type=column_type,
                         comment=comment or "",
                         primary=(column_key or "").upper() == "PRI",
+                        foreign=(table_name, column_name) in foreign_columns,
                     )
                 )
         return list(grouped.values())

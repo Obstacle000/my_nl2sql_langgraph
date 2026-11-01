@@ -17,7 +17,7 @@ from app.repositories.mysql.meta_repo import MetaRepository
 from app.repositories.mysql.physical_table_repo import PhysicalTableRepository
 from app.services.meta_builder import collect_samples_table, enrich_columns, infer_roles
 from app.services.meta_index_service import MetaIndexService
-from app.services.meta_relation import resolve_relations
+from app.services.meta_relation import relations_to_roles, resolve_relations
 
 MAX_ROWS = 100_000
 
@@ -123,12 +123,25 @@ class DatasetService:
             await self.dataset_repo.add_table(dataset_id, table_name, physical, len(frame))
 
             # ③ 元数据 + LLM 富化
+            csv_schemas = [
+                TableSchema(
+                    name=physical,
+                    columns=[
+                        ColumnSchema(name=self._safe_col(c), type=self._sql_type(frame[c]))
+                        for c in frame.columns
+                    ],
+                )
+            ]
+            roles = await infer_roles(
+                csv_schemas, execute=self.physical_repo.execute_select, samples=samples
+            )
             columns = self._build_columns(
                 physical,
                 frame,
                 dataset_id=dataset_id,
                 datasource_id=dataset.datasource_id or 0,
                 samples=samples,
+                roles=roles,
             )
             metas = await enrich_columns(physical, columns, samples)
             for column in columns:
@@ -194,10 +207,20 @@ class DatasetService:
         schemas = [
             TableSchema(name=table, columns=cols) for table, cols in by_table.items()
         ]
+        # 先用值域判断主外键（roles），关系配对该范围会小很多
+        roles = await infer_roles(
+            schemas, execute=self.physical_repo.execute_select, samples=samples
+        )
         relations = await resolve_relations(
-            schemas, self.physical_repo.execute_select, samples
+            schemas,
+            self.physical_repo.execute_select,
+            samples,
+            roles=roles,
         )
         await self.meta_repo.replace_relations(dataset_id, relations)
+        await self.meta_repo.update_column_roles(
+            dataset_id, relations_to_roles(dataset_id, relations)
+        )
         return len(relations)
 
     # -- 纯函数（无 IO） --
@@ -245,19 +268,11 @@ class DatasetService:
         dataset_id: int = 0,
         datasource_id: int = 0,
         samples: dict[str, list] | None = None,
+        roles: dict[str, str] | None = None,
     ) -> list[ColumnInfoEntity]:
         samples = samples or {}
-        # 先按类型造 schema，交给统一的 role 推断（CSV 无主键，primary 全 False）
-        schemas = [
-            TableSchema(
-                name=physical,
-                columns=[
-                    ColumnSchema(name=cls._safe_col(col), type=cls._sql_type(frame[col]))
-                    for col in frame.columns
-                ],
-            )
-        ]
-        roles = infer_roles(schemas)
+        # roles 由调用方用 infer_roles 算好传进来（需要 execute 做值域判断）
+        roles = roles or {}
 
         # 与 MySQL 路径一致：id 带 dataset 前缀，table_id 保持物理表名
         # （table_id 会作为 SQL 里的表名进 prompt，不能带前缀）

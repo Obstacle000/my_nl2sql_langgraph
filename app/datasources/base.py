@@ -10,7 +10,8 @@ class ColumnSchema:
     name: str
     type: str
     comment: str = ""
-    primary: bool = False        # 是否真实主键（information_schema.COLUMN_KEY='PRI'）
+    primary: bool = False        # 是否真实主键（COLUMN_KEY='PRI'）
+    foreign: bool = False        # 是否真实外键（KEY_COLUMN_USAGE 里有引用）
 
 
 @dataclass

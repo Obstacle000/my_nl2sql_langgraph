@@ -24,7 +24,7 @@ from app.repositories.qdrant.meta_qdrant_repo import MetaQdrantRepository
 from app.services.meta_alias import generate_column_meta
 from app.services.meta_builder import collect_samples, infer_roles
 from app.services.meta_index_service import MetaIndexService
-from app.services.meta_relation import resolve_relations
+from app.services.meta_relation import relations_to_roles, resolve_relations
 
 COLUMN_COLLECTION = MetaIndexService.COLUMN_COLLECTION
 class DatasourceService:
@@ -108,9 +108,13 @@ class DatasourceService:
             source.execute,
             samples,
             source=source,
-            roles=self._infer_roles(selected),
+            roles=await self._infer_roles(selected, source.execute, samples),
         )
         await self.meta_repo.replace_relations(dataset.id, relations)
+        # 关系确定后，把两端的 role 标成外键 / 主键
+        await self.meta_repo.update_column_roles(
+            dataset.id, relations_to_roles(dataset.id, relations)
+        )
         await self.repo.set_status(datasource.id, "ok")
 
         # 把这个数据集的元数据从 MySQL 读出来，重新生成 Qdrant 向量和 ES 索引。
@@ -362,7 +366,7 @@ class DatasourceService:
                 source.execute,
                 samples,
                 source=source,
-                roles=self._infer_roles(schemas),
+                roles=await self._infer_roles(schemas, source.execute, samples),
             )
             await self.meta_repo.replace_relations(dataset.id, relations)
             # 把一个数据集的所有字段重新向量化 + 重建取值索引
@@ -446,9 +450,9 @@ class DatasourceService:
         return await collect_samples(source, schemas)
 
     @staticmethod
-    def _infer_roles(schemas) -> dict[str, str]:
-        """主键取真实 schema 信息，外键看是否同名于其他表主键，其余按度量/维度判定。"""
-        return infer_roles(schemas)
+    async def _infer_roles(schemas, execute=None, samples=None) -> dict[str, str]:
+        """推断 role：数据库标记优先，其次用值域相似度判主外键。"""
+        return await infer_roles(schemas, execute=execute, samples=samples)
 
     async def _persist_schema(
         self,
@@ -458,7 +462,7 @@ class DatasourceService:
         samples: dict[str, list] | None = None,
     ) -> list[ColumnInfoEntity]:
         samples = samples or {}
-        roles = self._infer_roles(schemas)
+        roles = await self._infer_roles(schemas)
         columns: list[ColumnInfoEntity] = []
         for schema in schemas:
             # 存dataset_tables
